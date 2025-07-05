@@ -35,6 +35,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     
+    # Permissions explicites pour écriture
+    permissions:
+      contents: write
+      issues: write
+    
     outputs:
       dataset-created: ${{ steps.collect.outputs.dataset-created }}
       dataset-path: ${{ steps.collect.outputs.dataset-path }}
@@ -46,6 +51,7 @@ jobs:
       with:
         fetch-depth: 1
         token: ${{ secrets.GITHUB_TOKEN }}
+        persist-credentials: true
 
     - name: 🐍 Setup Python
       uses: actions/setup-python@v4
@@ -186,6 +192,8 @@ jobs:
 
     - name: 📝 Commit and Push Dataset
       if: steps.collect.outputs.dataset-created == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
         
@@ -228,7 +236,11 @@ jobs:
           echo "✅ Commit effectué avec changements détectés"
         fi
         
-        echo "🚀 Pushing to repository..."
+        # Configurer l'URL remote avec le token pour le push
+        echo "🔧 Configuration de l'authentification Git..."
+        git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
+        
+        echo "🚀 Pushing to repository avec authentification..."
         git push
         
         echo "✅ Dataset committed and pushed successfully"
@@ -300,6 +312,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: collect-and-commit
     if: failure() && github.event_name == 'schedule'
+    
+    permissions:
+      issues: write
     
     steps:
     - name: 🚨 Notify Collection Failure
