@@ -1,0 +1,330 @@
+name: 📰 Daily News Dataset Collection
+
+on:
+  # Collecte quotidienne à 06:00 UTC (08:00 CET)
+  schedule:
+    - cron: '0 6 * * *'
+  
+  # Collecte manuelle
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Source de données'
+        required: true
+        default: 'placeholder'
+        type: choice
+        options:
+          - 'placeholder'
+          - 'rss'
+          - 'newsapi'
+      
+      count:
+        description: 'Nombre d\'échantillons à collecter'
+        required: true
+        default: '25'
+        type: string
+      
+      force_commit:
+        description: 'Forcer le commit même si aucun changement'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  collect-and-commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    outputs:
+      dataset-created: ${{ steps.collect.outputs.dataset-created }}
+      dataset-path: ${{ steps.collect.outputs.dataset-path }}
+      sample-count: ${{ steps.collect.outputs.sample-count }}
+    
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        
+        # Dépendances de base
+        pip install pandas>=2.0.0
+        
+        # Dépendances optionnelles pour collecte RSS/NewsAPI
+        pip install feedparser requests || echo "Optional dependencies failed, will use placeholder"
+        
+        echo "✅ Dependencies installed"
+
+    - name: 📰 Collect News Dataset
+      id: collect
+      env:
+        NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+      run: |
+        set -euo pipefail
+        
+        # Déterminer les paramètres selon le mode de déclenchement
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          SOURCE="${{ github.event.inputs.source }}"
+          COUNT="${{ github.event.inputs.count }}"
+          FORCE_COMMIT="${{ github.event.inputs.force_commit }}"
+        else
+          # Déclenchement automatique (cron)
+          SOURCE="placeholder"  # Changer en "rss" quand prêt
+          COUNT="25"
+          FORCE_COMMIT="false"
+        fi
+        
+        echo "🔧 Configuration:"
+        echo "  Source: $SOURCE"
+        echo "  Count: $COUNT"
+        echo "  Force commit: $FORCE_COMMIT"
+        
+        # Exécuter le collecteur
+        echo "📰 Collecte des actualités financières..."
+        
+        if python scripts/collect_news.py --source "$SOURCE" --count "$COUNT"; then
+          echo "✅ Collecte réussie"
+          
+          # Déterminer le fichier créé
+          TODAY=$(date -u '+%Y%m%d')
+          DATASET_FILE="datasets/news_${TODAY}.csv"
+          
+          if [ -f "$DATASET_FILE" ]; then
+            SAMPLE_COUNT=$(tail -n +2 "$DATASET_FILE" | wc -l)
+            echo "📊 Dataset créé: $DATASET_FILE ($SAMPLE_COUNT échantillons)"
+            
+            echo "dataset-created=true" >> $GITHUB_OUTPUT
+            echo "dataset-path=$DATASET_FILE" >> $GITHUB_OUTPUT
+            echo "sample-count=$SAMPLE_COUNT" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Dataset non trouvé après collecte"
+            exit 1
+          fi
+        else
+          echo "❌ Échec de la collecte"
+          exit 1
+        fi
+
+    - name: 🔍 Validate Dataset Quality
+      if: steps.collect.outputs.dataset-created == 'true'
+      run: |
+        DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
+        
+        echo "🔍 Validation du dataset: $DATASET_PATH"
+        
+        # Utiliser notre script de validation si disponible
+        if [ -f "scripts/validate_dataset.py" ]; then
+          if python scripts/validate_dataset.py "$DATASET_PATH"; then
+            echo "✅ Validation réussie"
+          else
+            echo "❌ Dataset invalide - arrêt du processus"
+            echo "💡 Vérifiez la qualité des données collectées"
+            exit 1
+          fi
+        else
+          echo "⚠️ Script de validation non trouvé, validation basique..."
+          
+          # Validation basique
+          if [ ! -s "$DATASET_PATH" ]; then
+            echo "❌ Dataset vide"
+            exit 1
+          fi
+          
+          # Vérifier l'en-tête
+          if ! head -1 "$DATASET_PATH" | grep -q "text,label"; then
+            echo "❌ En-tête CSV incorrect"
+            exit 1
+          fi
+          
+          echo "✅ Validation basique OK"
+        fi
+
+    - name: 📊 Dataset Statistics
+      if: steps.collect.outputs.dataset-created == 'true'
+      run: |
+        DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
+        
+        echo "📊 Statistiques du dataset:"
+        echo "=========================="
+        
+        # Statistiques CSV basiques
+        TOTAL_LINES=$(wc -l < "$DATASET_PATH")
+        DATA_LINES=$((TOTAL_LINES - 1))  # Exclure l'en-tête
+        
+        echo "📄 Fichier: $DATASET_PATH"
+        echo "📊 Échantillons: $DATA_LINES"
+        echo "💾 Taille: $(du -h "$DATASET_PATH" | cut -f1)"
+        
+        # Distribution des labels
+        echo ""
+        echo "🏷️ Distribution des labels:"
+        tail -n +2 "$DATASET_PATH" | cut -d',' -f2 | sort | uniq -c | while read count label; do
+          percentage=$(echo "scale=1; $count * 100 / $DATA_LINES" | bc -l)
+          echo "  $label: $count ($percentage%)"
+        done
+        
+        # Aperçu du contenu
+        echo ""
+        echo "👀 Aperçu du contenu:"
+        head -4 "$DATASET_PATH"
+
+    - name: 📝 Commit and Push Dataset
+      if: steps.collect.outputs.dataset-created == 'true'
+      run: |
+        set -euo pipefail
+        
+        # Configuration Git
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        
+        DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
+        SAMPLE_COUNT="${{ steps.collect.outputs.sample-count }}"
+        TODAY=$(date -u '+%Y-%m-%d')
+        
+        # Vérifier s'il y a des changements
+        git add datasets/
+        
+        if git diff --staged --quiet && [ "${{ github.event.inputs.force_commit }}" != "true" ]; then
+          echo "ℹ️ Aucun changement détecté dans les datasets"
+          echo "💡 Le dataset pour aujourd'hui existe déjà ou est identique"
+          exit 0
+        fi
+        
+        # Créer le message de commit avec détails
+        COMMIT_MSG="📰 Add daily financial news dataset ($TODAY)
+
+        📊 Dataset details:
+        - File: $DATASET_PATH
+        - Samples: $SAMPLE_COUNT
+        - Source: ${{ github.event.inputs.source || 'placeholder' }}
+        - Generated: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+        
+        🤖 Auto-generated by Daily News Collection workflow"
+        
+        # Commit et push
+        git commit -m "$COMMIT_MSG"
+        
+        echo "🚀 Pushing to repository..."
+        git push
+        
+        echo "✅ Dataset committed and pushed successfully"
+        echo "🔄 This will trigger validation and fine-tuning workflows"
+
+    - name: 📝 Create Summary Comment
+      if: always() && github.event_name == 'workflow_dispatch'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const status = '${{ job.status }}';
+          const datasetCreated = '${{ steps.collect.outputs.dataset-created }}' === 'true';
+          const datasetPath = '${{ steps.collect.outputs.dataset-path }}';
+          const sampleCount = '${{ steps.collect.outputs.sample-count }}';
+          const source = '${{ github.event.inputs.source }}';
+          const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
+          
+          let emoji, statusText, message;
+          
+          if (status === 'success' && datasetCreated) {
+            emoji = '✅';
+            statusText = 'SUCCESS';
+            message = `🎉 Dataset créé avec succès !
+            
+            **📊 Détails du dataset:**
+            - 📄 Fichier: \`${datasetPath}\`
+            - 📊 Échantillons: ${sampleCount}
+            - 🔗 Source: ${source}
+            - 🕐 Timestamp: ${new Date().toISOString()}
+            
+            **🚀 Prochaines étapes:**
+            Le dataset a été committé et va déclencher automatiquement :
+            1. 🔍 Validation qualité (Dataset Quality Gate)
+            2. 🤖 Fine-tuning automatique (si validation OK)
+            3. 🚀 Déploiement sur HuggingFace (si configuré)`;
+          } else {
+            emoji = '❌';
+            statusText = 'FAILED';
+            message = `🚨 Échec de la collecte de dataset.
+            
+            **⚠️ Problème détecté:**
+            - Status: ${status}
+            - Dataset créé: ${datasetCreated}
+            
+            **🔧 Actions suggérées:**
+            1. Vérifier les logs du workflow
+            2. Tester la collecte localement
+            3. Vérifier les dépendances (feedparser, requests)`;
+          }
+          
+          const commentBody = `## ${emoji} Daily News Collection - ${statusText}
+          
+          ${message}
+          
+          ### 🔗 Liens utiles
+          - 📊 [Workflow complet](${runUrl})
+          - 🔧 Script: \`scripts/collect_news.py\`
+          - 📖 [Guide des datasets](DATASET_WORKFLOW.md)
+          
+          ---
+          *🤖 Rapport automatique de collecte quotidienne*
+          `;
+          
+          // Pour les déclenchements manuels, créer une issue ou commentaire
+          console.log('Workflow summary:', commentBody);
+
+  # Job optionnel pour notifier en cas d'échec
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: collect-and-commit
+    if: failure() && github.event_name == 'schedule'
+    
+    steps:
+    - name: 🚨 Notify Collection Failure
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Créer une issue pour signaler l'échec de collecte automatique
+          const issueBody = `# 🚨 Échec de la collecte quotidienne de dataset
+          
+          La collecte automatique de dataset du ${new Date().toISOString().split('T')[0]} a échoué.
+          
+          ## 📊 Détails
+          - **Workflow:** Daily News Dataset Collection
+          - **Trigger:** Scheduled (cron)
+          - **Timestamp:** ${new Date().toISOString()}
+          - **Run ID:** ${context.runId}
+          
+          ## 🔗 Liens
+          - [Workflow failed](${context.payload.repository.html_url}/actions/runs/${context.runId})
+          - [Script de collecte](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
+          
+          ## 🔧 Actions suggérées
+          1. Vérifier les logs du workflow
+          2. Tester la collecte manuellement
+          3. Vérifier la disponibilité des sources RSS/API
+          4. Lancer une collecte manuelle si nécessaire
+          
+          ## 💡 Collecte manuelle
+          Vous pouvez lancer une collecte manuelle via :
+          **Actions → Daily News Dataset Collection → Run workflow**
+          
+          ---
+          *Issue créée automatiquement par le système de monitoring*
+          `;
+          
+          await github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `🚨 Échec collecte automatique dataset ${new Date().toISOString().split('T')[0]}`,
+            body: issueBody,
+            labels: ['bug', 'automation', 'dataset-collection']
+          });
