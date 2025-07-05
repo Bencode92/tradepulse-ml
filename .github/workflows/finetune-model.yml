@@ -61,6 +61,32 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
+    - name: 🔧 Set Environment Variables
+      run: |
+        # Pour les déclenchements manuels (workflow_dispatch)
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "DATASET=${{ github.event.inputs.dataset }}" >> $GITHUB_ENV
+          echo "MODEL_NAME=${{ github.event.inputs.model_name }}" >> $GITHUB_ENV
+          echo "EPOCHS=${{ github.event.inputs.epochs }}" >> $GITHUB_ENV
+          echo "LEARNING_RATE=${{ github.event.inputs.learning_rate }}" >> $GITHUB_ENV
+          echo "PUSH_TO_HUB=${{ github.event.inputs.push_to_hub }}" >> $GITHUB_ENV
+        else
+          # Pour les déclenchements automatiques (push)
+          echo "DATASET=news_20250705.csv" >> $GITHUB_ENV
+          echo "MODEL_NAME=yiyanghkust/finbert-tone" >> $GITHUB_ENV
+          echo "EPOCHS=3" >> $GITHUB_ENV
+          echo "LEARNING_RATE=2e-5" >> $GITHUB_ENV
+          echo "PUSH_TO_HUB=false" >> $GITHUB_ENV
+        fi
+        
+        echo "🔧 Environment variables set:"
+        echo "  Trigger: ${{ github.event_name }}"
+        echo "  Dataset: $DATASET"
+        echo "  Model: $MODEL_NAME"
+        echo "  Epochs: $EPOCHS"
+        echo "  Learning Rate: $LEARNING_RATE"
+        echo "  Push to Hub: $PUSH_TO_HUB"
+
     - name: 📦 Install Dependencies
       run: |
         python -m pip install --upgrade pip
@@ -92,21 +118,29 @@ jobs:
         PY
 
     - name: 🔐 Setup HuggingFace Token
-      if: github.event.inputs.push_to_hub == 'true'
+      if: env.PUSH_TO_HUB == 'true'
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         if [ -z "$HF_TOKEN" ]; then
           echo "❌ HF_TOKEN required for push_to_hub=true"
+          echo "💡 Add HF_TOKEN to repository secrets in Settings > Secrets"
           exit 1
         fi
         
-        echo "$HF_TOKEN" | huggingface-cli login --token
+        # Version corrigée de la commande login
+        huggingface-cli login --token "$HF_TOKEN"
         echo "✅ HuggingFace authentication successful"
+        
+        # Vérification de l'authentification
+        huggingface-cli whoami || {
+          echo "❌ HuggingFace authentication failed"
+          exit 1
+        }
 
     - name: 📊 Validate Dataset
       run: |
-        DATASET_FILE="datasets/${{ github.event.inputs.dataset || 'news_20250705.csv' }}"
+        DATASET_FILE="datasets/$DATASET"
         echo "🔍 Checking dataset: $DATASET_FILE"
         
         if [ ! -f "$DATASET_FILE" ]; then
@@ -121,14 +155,17 @@ jobs:
         
         echo "👀 Dataset preview:"
         head -3 "$DATASET_FILE"
+        
+        # Validation du format CSV
+        if [[ "$DATASET_FILE" == *.csv ]]; then
+          # Vérifier que le fichier a les colonnes text,label
+          if ! head -1 "$DATASET_FILE" | grep -q "text.*label"; then
+            echo "⚠️ CSV header should contain 'text' and 'label' columns"
+            echo "📋 Current header: $(head -1 "$DATASET_FILE")"
+          fi
+        fi
 
     - name: 🤖 Run Fine-tuning
-      env:
-        DATASET: ${{ github.event.inputs.dataset || 'news_20250705.csv' }}
-        MODEL_NAME: ${{ github.event.inputs.model_name || 'yiyanghkust/finbert-tone' }}
-        EPOCHS: ${{ github.event.inputs.epochs || '3' }}
-        LEARNING_RATE: ${{ github.event.inputs.learning_rate || '2e-5' }}
-        PUSH_TO_HUB: ${{ github.event.inputs.push_to_hub || 'false' }}
       run: |
         echo "🚀 Starting FinBERT fine-tuning..."
         echo "📋 Configuration:"
@@ -145,7 +182,7 @@ jobs:
         ARGS="--dataset datasets/$DATASET --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --epochs $EPOCHS --lr $LEARNING_RATE"
         
         if [ "$PUSH_TO_HUB" = "true" ]; then
-          HUB_ID="Bencode92/tradepulse-finbert-$(date +%Y%m%d)"
+          HUB_ID="Bencode92/tradepulse-finbert-$(date +%Y%m%d-%H%M)"
           ARGS="$ARGS --push --hub_id $HUB_ID"
           echo "🚀 Will push to HuggingFace Hub as: $HUB_ID"
         fi
@@ -210,13 +247,13 @@ jobs:
         echo "✅ Fine-tuning completed successfully!"
         echo "🔍 Check the 'Actions' tab for downloadable artifacts"
         echo "📊 Model saved in: $(find models/ -type d -name "finbert-*" | head -1)"
-        if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
+        if [ "$PUSH_TO_HUB" = "true" ]; then
           echo "🚀 Model pushed to HuggingFace Hub"
         fi
         
         echo ""
         echo "📋 Final Summary:"
-        echo "  Dataset: ${{ github.event.inputs.dataset }}"
-        echo "  Model: ${{ github.event.inputs.model_name }}"
-        echo "  Epochs: ${{ github.event.inputs.epochs }}"
+        echo "  Dataset: $DATASET"
+        echo "  Model: $MODEL_NAME"
+        echo "  Epochs: $EPOCHS"
         echo "  Status: SUCCESS ✅"
