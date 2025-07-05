@@ -86,19 +86,19 @@ jobs:
         
         # Vérification des versions critiques
         python -c "
-        import transformers, torch, datasets
-        print(f'✅ Transformers: {transformers.__version__}')
-        print(f'✅ PyTorch: {torch.__version__}')
-        print(f'✅ Datasets: {datasets.__version__}')
-        
-        # Vérifier que evaluation_strategy est supporté
-        from transformers import TrainingArguments
-        try:
-            args = TrainingArguments(output_dir='/tmp', evaluation_strategy='epoch')
-            print('✅ evaluation_strategy parameter supported')
-        except Exception as e:
-            print(f'❌ evaluation_strategy error: {e}')
-            exit(1)
+import transformers, torch, datasets
+print(f'✅ Transformers: {transformers.__version__}')
+print(f'✅ PyTorch: {torch.__version__}')
+print(f'✅ Datasets: {datasets.__version__}')
+
+# Vérifier que evaluation_strategy est supporté
+from transformers import TrainingArguments
+try:
+    args = TrainingArguments(output_dir='/tmp', evaluation_strategy='epoch')
+    print('✅ evaluation_strategy parameter supported')
+except Exception as e:
+    print(f'❌ evaluation_strategy error: {e}')
+    exit(1)
         "
 
     - name: 🔐 Setup HuggingFace Token
@@ -106,16 +106,13 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
-        if [ ! -z "$HF_TOKEN" ]; then
-          python -c "
-          from huggingface_hub import login
-          login('$HF_TOKEN')
-          print('✅ HuggingFace authentication successful')
-          "
-        else
+        if [ -z "$HF_TOKEN" ]; then
           echo "❌ HF_TOKEN required for push_to_hub=true"
           exit 1
         fi
+        
+        echo "$HF_TOKEN" | huggingface-cli login --token
+        echo "✅ HuggingFace authentication successful"
 
     - name: 📊 Validate Dataset
       run: |
