@@ -19,50 +19,86 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Environment
-.env
-.venv
-env/
+# Virtual environments
 venv/
+env/
 ENV/
-env.bak/
-venv.bak/
+.venv/
+.env/
 
-# ML Models (trop volumineux pour git)
-models/experiments/*/
-models/production/*/
-!models/experiments/.gitkeep
-!models/production/.gitkeep
-
-# Datasets (données sensibles)
-datasets/raw/*.json
-datasets/labeled/*.csv
-datasets/processed/*.csv
-!datasets/*/.gitkeep
-
-# Logs
-logs/
-*.log
-
-# Weights & Biases
-wandb/
-
-# MLflow
-mlruns/
-
-# Mac
-.DS_Store
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# Machine Learning specific
+models/*/
+*.h5
+*.pkl
+*.joblib
+*.model
+*.bin
+*.safetensors
+
+# Logs
+*.log
+logs/
+wandb/
+tensorboard/
+mlruns/
+
+# Data files
+*.csv
+*.json
+*.parquet
+*.feather
+datasets/*.csv
+datasets/*.json
+!datasets/news_20250705.csv  # Keep example dataset
 
 # Temporary files
-*.tmp
-*.temp
+.cache/
+.tmp/
+temp/
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# PyTorch
+*.pth
+*.pt
+
+# Transformers cache
+.cache/huggingface/
+
+# Training outputs
+checkpoint-*/
+runs/
+outputs/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Coverage
+.coverage
+htmlcov/
+
+# Testing
+.pytest_cache/
+.tox/
