@@ -1,269 +1,226 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-TradePulse FinBERT Fine-tuning Script
-Fine-tuning FinBERT pour l'analyse de sentiment financier avec données propriétaires
-"""
+TradePulse – FinBERT Fine‑Tuning Utility (clean version)
+=======================================================
 
-import os
-import json
-import pandas as pd
-import yaml
-from datetime import datetime
+•  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
+  en **positive / neutral / negative**.
+•  Découpe automatiquement en train / validation (80 / 20 stratifié).
+•  Tokenise, fine‑tune et enregistre un FinBERT (ou autre modèle) déjà
+  présent sur HuggingFace Hub.
+•  Produit un *training_report.json* + logs TensorBoard dans <output_dir>.
+
+Exemple :
+----------
+$ python finetune_tradepulse.py \
+    --dataset datasets/news_20250705.csv \
+    --output_dir models/finbert-v1 \
+    --model_name yiyanghkust/finbert-tone
+"""
+from __future__ import annotations
+
 import argparse
+import json
 import logging
+import os
 from pathlib import Path
+from typing import Dict, List
+from datetime import datetime
 
-import torch
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    TrainingArguments,
-    Trainer,
-    DataCollatorWithPadding,
-    EarlyStoppingCallback
-)
-from datasets import Dataset, DatasetDict
-from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 import numpy as np
+import pandas as pd
+import torch
+from datasets import Dataset, DatasetDict
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.model_selection import train_test_split
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    EarlyStoppingCallback,
+    Trainer,
+    TrainingArguments,
+    EvalPrediction,
+    set_seed,
+)
 
-# Configuration du logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+LOG_FMT = "%(asctime)s — %(levelname)s — %(message)s"
+logging.basicConfig(level=logging.INFO, format=LOG_FMT,
+                    handlers=[logging.FileHandler("finetune.log"),
+                              logging.StreamHandler()])
+logger = logging.getLogger("tradepulse-finetune")
 
-class TradePulseFineTuner:
-    def __init__(self, config_path="config/training_config.yaml"):
-        """Initialize le fine-tuner avec la configuration"""
-        self.config = self.load_config(config_path)
-        self.tokenizer = None
-        self.model = None
-        self.datasets = None
-        
-    def load_config(self, config_path):
-        """Charge la configuration depuis le fichier YAML"""
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    
-    def load_data(self):
-        """Charge et prépare les données d'entraînement"""
-        logger.info("📊 Chargement des données d'entraînement...")
-        
-        # Chargement des fichiers CSV
-        train_df = pd.read_csv(self.config['data']['train_file'])
-        eval_df = pd.read_csv(self.config['data']['eval_file'])
-        
-        # Nettoyage des données
-        train_df = train_df.dropna().reset_index(drop=True)
-        eval_df = eval_df.dropna().reset_index(drop=True)
-        
-        # Mapping des labels
-        label2id = self.config['labels']['label2id']
-        train_df['labels'] = train_df[self.config['data']['label_column']].map(label2id)
-        eval_df['labels'] = eval_df[self.config['data']['label_column']].map(label2id)
-        
-        # Conversion en datasets Hugging Face
-        train_dataset = Dataset.from_pandas(train_df)
-        eval_dataset = Dataset.from_pandas(eval_df)
-        
-        self.datasets = DatasetDict({
-            'train': train_dataset,
-            'eval': eval_dataset
-        })
-        
-        logger.info(f"✅ Données chargées: {len(train_dataset)} train, {len(eval_dataset)} eval")
-        
-        # Affichage de la distribution des classes
-        train_dist = train_df['labels'].value_counts().sort_index()
-        logger.info(f"📈 Distribution train: {dict(train_dist)}")
-        
-        return self.datasets
-    
-    def load_model_and_tokenizer(self):
-        """Charge le modèle de base et le tokenizer"""
-        logger.info(f"🤖 Chargement du modèle: {self.config['model']['base_model']}")
-        
-        self.tokenizer = AutoTokenizer.from_pretrained(self.config['model']['base_model'])
+# ---------------------------------------------------------------------------
+# Fine‑tuner class
+# ---------------------------------------------------------------------------
+class Finetuner:
+    LABEL_MAP: Dict[str, int] = {"negative": 0, "neutral": 1, "positive": 2}
+    ID2LABEL: Dict[int, str] = {v: k for k, v in LABEL_MAP.items()}
+
+    def __init__(self, model_name: str, max_length: int):
+        self.model_name = model_name
+        self.max_length = max_length
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForSequenceClassification.from_pretrained(
-            self.config['model']['base_model'],
-            num_labels=self.config['model']['num_labels'],
-            problem_type=self.config['model']['problem_type'],
-            id2label=self.config['labels']['id2label'],
-            label2id=self.config['labels']['label2id']
+            model_name,
+            num_labels=3,
+            id2label=self.ID2LABEL,
+            label2id=self.LABEL_MAP,
         )
-        
-        logger.info("✅ Modèle et tokenizer chargés")
-        
-    def tokenize_data(self):
-        """Tokenise les données"""
-        logger.info("🔤 Tokenisation des données...")
-        
-        def tokenize_function(examples):
+        logger.info("✅ Model & tokenizer loaded : %s", model_name)
+
+    # ---------------------------------------------------------------------
+    # Data helpers
+    # ---------------------------------------------------------------------
+    def _load_raw(self, path: Path) -> List[Dict[str, str]]:
+        if path.suffix.lower() == ".csv":
+            return pd.read_csv(path).to_dict("records")
+        if path.suffix.lower() == ".json":
+            return json.loads(path.read_text("utf-8"))
+        raise ValueError(f"Unsupported file type : {path}")
+
+    def _standardise(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        out: List[Dict[str, str]] = []
+        for row in rows:
+            text = row.get("text") or f"{row.get('title', '')} {row.get('content', '')}".strip()
+            label = (row.get("label") or row.get("sentiment") or row.get("impact") or "").lower()
+            if not text or label not in self.LABEL_MAP:
+                continue
+            out.append({"text": text, "label": self.LABEL_MAP[label]})
+        return out
+
+    def load_dataset(self, path: Path) -> DatasetDict:
+        """Load & tokenise dataset, return HF DatasetDict."""
+        raw = self._load_raw(path)
+        data = self._standardise(raw)
+        if not data:
+            raise RuntimeError("No usable samples detected in dataset !" )
+        logger.info("📊 %d samples after cleaning", len(data))
+
+        train, val = train_test_split(
+            data,
+            test_size=0.2,
+            stratify=[d["label"] for d in data],
+            random_state=42,
+        )
+
+        def tok(batch):
             return self.tokenizer(
-                examples[self.config['data']['text_column']],
+                batch["text"],
                 truncation=True,
-                padding=False,
-                max_length=self.config['data']['max_length']
+                padding="max_length",
+                max_length=self.max_length,
             )
-        
-        self.datasets = self.datasets.map(
-            tokenize_function,
-            batched=True,
-            remove_columns=self.datasets['train'].column_names
+
+        train_ds = Dataset.from_list(train).map(tok, batched=True, remove_columns=["text"])
+        val_ds = Dataset.from_list(val).map(tok, batched=True, remove_columns=["text"])
+        return DatasetDict(train=train_ds, validation=val_ds)
+
+    # ---------------------------------------------------------------------
+    # Metrics
+    # ---------------------------------------------------------------------
+    @staticmethod
+    def _metrics(pred: EvalPrediction) -> Dict[str, float]:
+        logits, labels = pred
+        preds = np.argmax(logits, axis=1)
+        prec, rec, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
+        acc = accuracy_score(labels, preds)
+        return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
+
+    # ---------------------------------------------------------------------
+    # Training
+    # ---------------------------------------------------------------------
+    def train(self, ds: DatasetDict, args: argparse.Namespace):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_name = f"finbert-{ts}"
+
+        targs = TrainingArguments(
+            output_dir=args.output_dir,
+            num_train_epochs=args.epochs,
+            per_device_train_batch_size=args.train_bs,
+            per_device_eval_batch_size=args.eval_bs,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            warmup_steps=args.warmup,
+            evaluation_strategy=args.eval_strategy,
+            save_strategy=args.save_strategy,
+            load_best_model_at_end=True,
+            metric_for_best_model="f1",
+            greater_is_better=True,
+            logging_dir=os.path.join(args.output_dir, "logs"),
+            logging_steps=args.logging_steps,
+            seed=args.seed,
+            push_to_hub=args.push,
+            hub_model_id=args.hub_id if args.push else None,
+            report_to="tensorboard",
         )
-        
-        logger.info("✅ Tokenisation terminée")
-        
-    def compute_metrics(self, eval_pred):
-        """Calcule les métriques d'évaluation"""
-        predictions, labels = eval_pred
-        predictions = np.argmax(predictions, axis=1)
-        
-        accuracy = accuracy_score(labels, predictions)
-        f1 = f1_score(labels, predictions, average='weighted')
-        
-        return {
-            'accuracy': accuracy,
-            'f1': f1
-        }
-    
-    def train(self, output_dir=None, run_name=None):
-        """Lance l'entraînement"""
-        if output_dir is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = f"{self.config['output']['output_dir']}/finbert-sentiment-{timestamp}"
-        
-        if run_name is None:
-            run_name = f"{self.config['output']['run_name']}-{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        logger.info(f"🚀 Début de l'entraînement: {run_name}")
-        logger.info(f"📁 Dossier de sortie: {output_dir}")
-        
-        # Configuration de l'entraînement
-        training_args = TrainingArguments(
-            output_dir=output_dir,
-            learning_rate=self.config['training']['learning_rate'],
-            per_device_train_batch_size=self.config['training']['per_device_train_batch_size'],
-            per_device_eval_batch_size=self.config['training']['per_device_eval_batch_size'],
-            num_train_epochs=self.config['training']['num_train_epochs'],
-            weight_decay=self.config['training']['weight_decay'],
-            warmup_steps=self.config['training']['warmup_steps'],
-            logging_steps=self.config['training']['logging_steps'],
-            evaluation_strategy=self.config['training']['evaluation_strategy'],
-            eval_steps=self.config['training']['eval_steps'],
-            save_strategy=self.config['training']['save_strategy'],
-            save_steps=self.config['training']['save_steps'],
-            load_best_model_at_end=self.config['training']['load_best_model_at_end'],
-            metric_for_best_model=self.config['training']['metric_for_best_model'],
-            greater_is_better=self.config['training']['greater_is_better'],
-            logging_dir=f"{self.config['output']['logging_dir']}/{run_name}",
-            run_name=run_name,
-            report_to=None,  # Désactiver wandb par défaut
-            save_total_limit=2,
-            dataloader_pin_memory=False
-        )
-        
-        # Data collator
-        data_collator = DataCollatorWithPadding(tokenizer=self.tokenizer)
-        
-        # Trainer
+
         trainer = Trainer(
             model=self.model,
-            args=training_args,
-            train_dataset=self.datasets['train'],
-            eval_dataset=self.datasets['eval'],
+            args=targs,
+            train_dataset=ds["train"],
+            eval_dataset=ds["validation"],
             tokenizer=self.tokenizer,
-            data_collator=data_collator,
-            compute_metrics=self.compute_metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+            compute_metrics=self._metrics,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=2)],
         )
-        
-        # Entraînement
-        train_result = trainer.train()
-        
-        # Sauvegarde du modèle final
+
+        logger.info("🔥 Start training for %d epochs", args.epochs)
+        trainer.train()
         trainer.save_model()
-        trainer.save_state()
-        
-        # Évaluation finale
-        eval_result = trainer.evaluate()
-        
-        # Sauvegarde des métriques
-        self.save_training_results(output_dir, train_result, eval_result)
-        
-        logger.info("✅ Entraînement terminé!")
-        logger.info(f"📊 Résultats finaux: {eval_result}")
-        
-        return output_dir, eval_result
-    
-    def save_training_results(self, output_dir, train_result, eval_result):
-        """Sauvegarde les résultats d'entraînement"""
-        results = {
-            "training_config": self.config,
-            "train_result": {
-                "train_loss": train_result.training_loss,
-                "train_runtime": train_result.metrics['train_runtime'],
-                "train_samples_per_second": train_result.metrics['train_samples_per_second']
-            },
-            "eval_result": eval_result,
-            "model_info": {
-                "base_model": self.config['model']['base_model'],
-                "num_labels": self.config['model']['num_labels'],
-                "training_date": datetime.now().isoformat()
-            }
+
+        eval_res = trainer.evaluate()
+        logger.info("✅ Training complete — F1: %.4f | Acc: %.4f", eval_res["eval_f1"], eval_res["eval_accuracy"])
+
+        # save a report
+        report = {
+            "model": self.model_name,
+            "epochs": args.epochs,
+            "metrics": eval_res,
+            "timestamp": datetime.now().isoformat(),
         }
-        
-        # Sauvegarde JSON
-        with open(f"{output_dir}/training_results.json", 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        
-        # Sauvegarde des métriques séparément
-        with open(f"{output_dir}/metrics.json", 'w', encoding='utf-8') as f:
-            json.dump(eval_result, f, indent=2)
-        
-        logger.info(f"💾 Résultats sauvegardés dans {output_dir}")
+        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        with open(Path(args.output_dir, "training_report.json"), "w") as fh:
+            json.dump(report, fh, indent=2)
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="TradePulse FinBERT fine‑tuning utility")
+    p.add_argument("--dataset", required=True, type=Path, help="Path to CSV/JSON dataset")
+    p.add_argument("--output_dir", required=True, type=Path, help="Where to save the model & logs")
+    p.add_argument("--model_name", default="yiyanghkust/finbert-tone")
+    p.add_argument("--epochs", type=int, default=3)
+    p.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
+    p.add_argument("--train_bs", type=int, default=16, help="Train batch size")
+    p.add_argument("--eval_bs", type=int, default=32, help="Eval batch size")
+    p.add_argument("--warmup", type=int, default=500)
+    p.add_argument("--weight_decay", type=float, default=0.01)
+    p.add_argument("--max_length", type=int, default=512)
+    p.add_argument("--save_strategy", default="epoch")
+    p.add_argument("--eval_strategy", default="epoch")
+    p.add_argument("--logging_steps", type=int, default=100)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--push", action="store_true", help="Push model to HF Hub")
+    p.add_argument("--hub_id", type=str, default=None, help="HF repo id (org/model)")
+    return p
+
+# ---------------------------------------------------------------------------
+# Entrée principale
+# ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="TradePulse FinBERT Fine-tuning")
-    parser.add_argument("--config", default="config/training_config.yaml", help="Fichier de configuration")
-    parser.add_argument("--output_dir", help="Dossier de sortie")
-    parser.add_argument("--run_name", help="Nom du run")
-    parser.add_argument("--train_file", help="Fichier d'entraînement CSV")
-    parser.add_argument("--eval_file", help="Fichier d'évaluation CSV")
-    
-    args = parser.parse_args()
-    
-    # Initialisation
-    fine_tuner = TradePulseFineTuner(args.config)
-    
-    # Override des fichiers si spécifiés
-    if args.train_file:
-        fine_tuner.config['data']['train_file'] = args.train_file
-    if args.eval_file:
-        fine_tuner.config['data']['eval_file'] = args.eval_file
-    
-    # Pipeline complet
-    try:
-        # 1. Chargement des données
-        fine_tuner.load_data()
-        
-        # 2. Chargement du modèle
-        fine_tuner.load_model_and_tokenizer()
-        
-        # 3. Tokenisation
-        fine_tuner.tokenize_data()
-        
-        # 4. Entraînement
-        output_dir, results = fine_tuner.train(
-            output_dir=args.output_dir,
-            run_name=args.run_name
-        )
-        
-        logger.info(f"🎉 Fine-tuning terminé! Modèle sauvegardé dans: {output_dir}")
-        
-    except Exception as e:
-        logger.error(f"❌ Erreur lors du fine-tuning: {str(e)}")
-        raise
+    args = build_parser().parse_args()
+    set_seed(args.seed)
+
+    tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
+    ds = tuner.load_dataset(args.dataset)
+    tuner.train(ds, args)
 
 if __name__ == "__main__":
     main()
