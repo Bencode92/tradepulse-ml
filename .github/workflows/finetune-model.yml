@@ -84,22 +84,21 @@ jobs:
           pip install -r requirements.txt
         fi
         
-        # Vérification des versions critiques
-        python -c "
-import transformers, torch, datasets
-print(f'✅ Transformers: {transformers.__version__}')
-print(f'✅ PyTorch: {torch.__version__}')
-print(f'✅ Datasets: {datasets.__version__}')
+        # Affichage des versions + check evaluation_strategy
+        python - << 'PY'
+import transformers, torch, datasets, sys
+print(f"✅ Transformers: {transformers.__version__}")
+print(f"✅ PyTorch: {torch.__version__}")
+print(f"✅ Datasets: {datasets.__version__}")
 
-# Vérifier que evaluation_strategy est supporté
 from transformers import TrainingArguments
 try:
-    args = TrainingArguments(output_dir='/tmp', evaluation_strategy='epoch')
-    print('✅ evaluation_strategy parameter supported')
+    TrainingArguments(output_dir="/tmp", evaluation_strategy="epoch")
+    print("✅ evaluation_strategy parameter supported")
 except Exception as e:
-    print(f'❌ evaluation_strategy error: {e}')
-    exit(1)
-        "
+    print(f"❌ evaluation_strategy error: {e}")
+    sys.exit(1)
+PY
 
     - name: 🔐 Setup HuggingFace Token
       if: github.event.inputs.push_to_hub == 'true'
