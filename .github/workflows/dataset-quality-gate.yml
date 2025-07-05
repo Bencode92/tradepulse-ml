@@ -14,13 +14,19 @@ on:
       dataset_path:
         description: 'Dataset to validate (relative path from repo root)'
         required: true
-        default: 'datasets/news_20250705.csv'
+        default: 'datasets/financial_news_20250706.csv'
         type: string
 
 jobs:
   validate-datasets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    
+    outputs:
+      validation-status: ${{ steps.validation.outputs.status }}
+      dataset-name: ${{ steps.validation.outputs.dataset-name }}
+      error-count: ${{ steps.validation.outputs.error-count }}
+      warning-count: ${{ steps.validation.outputs.warning-count }}
     
     steps:
     - name: 📥 Checkout Repository
@@ -42,8 +48,16 @@ jobs:
         echo "✅ Dependencies installed"
 
     - name: 🔍 Validate Datasets
+      id: validation
       run: |
+        set -euo pipefail  # Fail fast on any error
+        
         echo "🧪 Starting dataset validation..."
+        
+        VALIDATION_SUCCESS=true
+        TOTAL_ERRORS=0
+        TOTAL_WARNINGS=0
+        VALIDATED_DATASETS=()
         
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           # Validation manuelle d'un dataset spécifique
@@ -56,7 +70,18 @@ jobs:
           fi
           
           echo "📊 Validating: $DATASET"
-          python scripts/validate_dataset.py "$DATASET"
+          
+          # Validation détaillée avec sauvegarde des erreurs
+          if python scripts/validate_dataset.py "$DATASET" --save-pr-errors --output-json "validation_report.json"; then
+            echo "✅ $DATASET passed validation"
+            DATASET_NAME=$(basename "$DATASET")
+            echo "dataset-name=$DATASET_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "❌ $DATASET failed validation"
+            VALIDATION_SUCCESS=false
+            DATASET_NAME=$(basename "$DATASET")
+            echo "dataset-name=$DATASET_NAME" >> $GITHUB_OUTPUT
+          fi
           
         else
           # Validation automatique des fichiers modifiés dans la PR
@@ -67,6 +92,10 @@ jobs:
           
           if [ -z "$CHANGED_FILES" ]; then
             echo "ℹ️ No dataset files modified in this PR"
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "dataset-name=none" >> $GITHUB_OUTPUT
+            echo "error-count=0" >> $GITHUB_OUTPUT
+            echo "warning-count=0" >> $GITHUB_OUTPUT
             exit 0
           fi
           
@@ -74,9 +103,7 @@ jobs:
           echo "$CHANGED_FILES"
           echo ""
           
-          # Valider chaque fichier modifié
-          VALIDATION_FAILED=false
-          
+          # Valider chaque fichier modifié avec rapports détaillés
           for dataset in $CHANGED_FILES; do
             echo "────────────────────────────────────────"
             echo "🔍 Validating: $dataset"
@@ -87,118 +114,282 @@ jobs:
               continue
             fi
             
-            if python scripts/validate_dataset.py "$dataset"; then
+            # Validation avec rapport JSON pour agrégation
+            DATASET_BASENAME=$(basename "$dataset" .csv)
+            REPORT_FILE="validation_${DATASET_BASENAME}.json"
+            
+            if python scripts/validate_dataset.py "$dataset" --save-pr-errors --output-json "$REPORT_FILE"; then
               echo "✅ $dataset passed validation"
+              VALIDATED_DATASETS+=("$dataset")
             else
               echo "❌ $dataset failed validation"
-              VALIDATION_FAILED=true
+              VALIDATION_SUCCESS=false
+              
+              # Agréger les erreurs
+              if [ -f "$REPORT_FILE" ]; then
+                ERRORS=$(jq -r '.error_count // 0' "$REPORT_FILE")
+                WARNINGS=$(jq -r '.warning_count // 0' "$REPORT_FILE")
+                TOTAL_ERRORS=$((TOTAL_ERRORS + ERRORS))
+                TOTAL_WARNINGS=$((TOTAL_WARNINGS + WARNINGS))
+              fi
             fi
             echo ""
           done
           
-          if [ "$VALIDATION_FAILED" = "true" ]; then
+          # Outputs pour les jobs suivants
+          if [ "$VALIDATION_SUCCESS" = "true" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "✅ All modified datasets passed validation!"
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
             echo "❌ One or more datasets failed validation"
             echo "💡 Please fix the issues above before merging"
-            exit 1
           fi
           
-          echo "✅ All modified datasets passed validation!"
+          # Derniers dataset validé pour chaîner avec le fine-tuning
+          if [ ${#VALIDATED_DATASETS[@]} -gt 0 ]; then
+            LAST_DATASET=$(basename "${VALIDATED_DATASETS[-1]}")
+            echo "dataset-name=$LAST_DATASET" >> $GITHUB_OUTPUT
+          else
+            echo "dataset-name=none" >> $GITHUB_OUTPUT
+          fi
+        fi
+        
+        echo "error-count=$TOTAL_ERRORS" >> $GITHUB_OUTPUT
+        echo "warning-count=$TOTAL_WARNINGS" >> $GITHUB_OUTPUT
+        
+        # Fail le job si validation échoue
+        if [ "$VALIDATION_SUCCESS" != "true" ]; then
+          exit 1
         fi
 
-    - name: 📊 Generate Validation Report
+    - name: 📊 Generate Validation Summary
       if: always()
       run: |
-        echo "📋 Dataset Validation Summary"
-        echo "============================="
-        echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-        echo "🌿 Branch: ${{ github.head_ref || github.ref_name }}"
-        echo "👤 Author: ${{ github.actor }}"
+        echo "📋 Dataset Validation Summary" | tee validation_summary.md
+        echo "=============================" | tee -a validation_summary.md
+        echo "" | tee -a validation_summary.md
+        echo "🕐 **Timestamp:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")" | tee -a validation_summary.md
+        echo "🌿 **Branch:** ${{ github.head_ref || github.ref_name }}" | tee -a validation_summary.md
+        echo "👤 **Author:** ${{ github.actor }}" | tee -a validation_summary.md
         
         if [ "${{ github.event_name }}" = "pull_request" ]; then
-          echo "🔗 PR: #${{ github.event.number }}"
-          echo "📝 Title: ${{ github.event.pull_request.title }}"
+          echo "🔗 **PR:** #${{ github.event.number }}" | tee -a validation_summary.md
+          echo "📝 **Title:** ${{ github.event.pull_request.title }}" | tee -a validation_summary.md
         fi
         
-        echo ""
-        echo "📁 Repository datasets:"
+        echo "" | tee -a validation_summary.md
+        echo "📊 **Résultats:**" | tee -a validation_summary.md
+        echo "- Erreurs: ${{ steps.validation.outputs.error-count || 0 }}" | tee -a validation_summary.md  
+        echo "- Avertissements: ${{ steps.validation.outputs.warning-count || 0 }}" | tee -a validation_summary.md
+        echo "- Statut: ${{ steps.validation.outputs.validation-status || 'unknown' }}" | tee -a validation_summary.md
+        
+        echo "" | tee -a validation_summary.md
+        echo "📁 **Datasets du repository:**" | tee -a validation_summary.md
         find datasets/ -name "*.csv" -o -name "*.json" | head -10 | while read file; do
           size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "?")
-          echo "  📄 $file ($size)"
+          echo "- 📄 \`$file\` ($size)" | tee -a validation_summary.md
         done
         
         total_datasets=$(find datasets/ -name "*.csv" -o -name "*.json" | wc -l)
-        echo "📊 Total datasets: $total_datasets"
+        echo "" | tee -a validation_summary.md
+        echo "📈 **Total datasets:** $total_datasets" | tee -a validation_summary.md
 
-  # Job de commentaire automatique sur la PR (optionnel)
-  comment-pr:
-    runs-on: ubuntu-latest
-    needs: validate-datasets
-    if: github.event_name == 'pull_request' && always()
-    
-    steps:
-    - name: 📝 Comment PR Results
+    - name: 💬 Comment PR with Detailed Results
+      if: github.event_name == 'pull_request' && always()
       uses: actions/github-script@v7
       with:
         script: |
-          const jobStatus = '${{ needs.validate-datasets.result }}';
+          const fs = require('fs');
+          const path = require('path');
+          
+          // Lire le statut de validation
+          const status = '${{ steps.validation.outputs.validation-status }}' || 'unknown';
+          const errorCount = parseInt('${{ steps.validation.outputs.error-count }}' || '0');
+          const warningCount = parseInt('${{ steps.validation.outputs.warning-count }}' || '0');
           const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
           
-          let emoji, status, message;
+          let emoji, statusText, message;
           
-          if (jobStatus === 'success') {
+          if (status === 'success') {
             emoji = '✅';
-            status = 'PASSED';
-            message = 'All dataset validations passed! Your datasets are ready for training.';
-          } else if (jobStatus === 'failure') {
+            statusText = 'SUCCÈS';
+            message = '🎉 Tous les datasets ont passé la validation ! Vos données sont prêtes pour l\'entraînement.';
+          } else if (status === 'failure') {
             emoji = '❌';
-            status = 'FAILED';
-            message = 'Dataset validation failed. Please check the validation report and fix the issues.';
+            statusText = 'ÉCHEC';
+            message = '🚨 La validation des datasets a échoué. Veuillez corriger les problèmes ci-dessous.';
           } else {
             emoji = '⚠️';
-            status = 'CANCELLED/SKIPPED';
-            message = 'Dataset validation was cancelled or skipped.';
+            statusText = 'ANNULÉ/IGNORÉ';
+            message = '🤔 La validation a été annulée ou ignorée.';
           }
           
-          const comment = `
-          ## ${emoji} Dataset Quality Gate - ${status}
+          // Lire les erreurs détaillées si disponibles
+          let detailedErrors = '';
+          try {
+            if (fs.existsSync('validation_errors.txt')) {
+              detailedErrors = fs.readFileSync('validation_errors.txt', 'utf8');
+            }
+          } catch (error) {
+            console.log('No detailed errors file found');
+          }
+          
+          // Lire le résumé si disponible
+          let summary = '';
+          try {
+            if (fs.existsSync('validation_summary.md')) {
+              summary = fs.readFileSync('validation_summary.md', 'utf8');
+            }
+          } catch (error) {
+            console.log('No summary file found');
+          }
+          
+          // Construire le commentaire
+          let commentBody = `## ${emoji} Dataset Quality Gate - ${statusText}
           
           ${message}
           
-          **Details:**
-          - 🔗 [View full validation report](${runUrl})
-          - 📊 Validation script: \`scripts/validate_dataset.py\`
-          - 🎯 Trigger: Dataset files modified in PR
-          
-          ---
-          
-          ### Next steps:
-          ${jobStatus === 'success' 
-            ? '🚀 Ready to merge! The fine-tuning job will start automatically after merge.'
-            : '🔧 Fix validation issues and push new changes to re-trigger validation.'
-          }
+          ### 📊 Résumé de validation
+          - **Erreurs critiques:** ${errorCount}
+          - **Avertissements:** ${warningCount}
+          - **Statut:** ${statusText}
           `;
           
-          github.rest.issues.createComment({
+          if (detailedErrors) {
+            commentBody += `
+          ### 🔍 Détails des problèmes
+          \`\`\`
+          ${detailedErrors}
+          \`\`\`
+          `;
+          }
+          
+          commentBody += `
+          ### 🔗 Liens utiles
+          - 📊 [Rapport complet de validation](${runUrl})
+          - 📖 [Guide du workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/DATASET_WORKFLOW.md)
+          - 🔧 Script de validation: \`scripts/validate_dataset.py\`
+          
+          ### 📋 Prochaines étapes
+          `;
+          
+          if (status === 'success') {
+            commentBody += `
+          ✅ **Prêt à merger !** Le fine-tuning se lancera automatiquement après le merge.
+          
+          🚀 **Actions disponibles:**
+          - Merger cette PR pour déclencher l'entraînement automatique
+          - Ou lancer manuellement via Actions → "TradePulse FinBERT Fine-tuning"
+          `;
+          } else {
+            commentBody += `
+          🔧 **Corrections requises:**
+          1. Corrigez les erreurs listées ci-dessus
+          2. Committez et pushez les modifications
+          3. La validation se relancera automatiquement
+          
+          💡 **Aide:**
+          - Testez localement: \`python scripts/validate_dataset.py votre_dataset.csv\`
+          - Consultez le [guide du workflow](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/DATASET_WORKFLOW.md)
+          `;
+          }
+          
+          commentBody += `
+          
+          ---
+          *🤖 Commentaire automatique généré par Dataset Quality Gate*
+          `;
+          
+          // Poster le commentaire
+          await github.rest.issues.createComment({
             issue_number: context.issue.number,
             owner: context.repo.owner,
             repo: context.repo.repo,
-            body: comment
+            body: commentBody
           });
 
-  # Préparer les artifacts pour debug si nécessaire
-  upload-artifacts:
-    runs-on: ubuntu-latest
-    needs: validate-datasets
-    if: always() && github.event_name == 'pull_request'
-    
-    steps:
-    - uses: actions/checkout@v4
-    
+    - name: 📈 Create GitHub Check Run
+      if: github.event_name == 'pull_request' && always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const status = '${{ steps.validation.outputs.validation-status }}' || 'unknown';
+          const errorCount = parseInt('${{ steps.validation.outputs.error-count }}' || '0');
+          const warningCount = parseInt('${{ steps.validation.outputs.warning-count }}' || '0');
+          
+          let conclusion, title, summary;
+          
+          if (status === 'success') {
+            conclusion = 'success';
+            title = '✅ Dataset validation passed';
+            summary = `All datasets are valid and ready for training!\n\n**Results:**\n- Errors: ${errorCount}\n- Warnings: ${warningCount}`;
+          } else {
+            conclusion = 'failure';
+            title = '❌ Dataset validation failed';  
+            summary = `Dataset validation failed. Please fix the issues before merging.\n\n**Results:**\n- Errors: ${errorCount}\n- Warnings: ${warningCount}`;
+          }
+          
+          await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'Dataset Quality Gate',
+            head_sha: context.payload.pull_request.head.sha,
+            status: 'completed',
+            conclusion: conclusion,
+            output: {
+              title: title,
+              summary: summary
+            }
+          });
+
+    # Préparer les artifacts pour debug et traçabilité
     - name: 📤 Upload Validation Artifacts
+      if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: dataset-validation-${{ github.event.number }}
+        name: dataset-validation-${{ github.event.number || 'manual' }}-${{ github.run_id }}
         path: |
+          validation_*.json
+          validation_errors.txt
+          validation_summary.md
           datasets/
-          scripts/validate_dataset.py
-        retention-days: 7
+        retention-days: 30
+
+  # Job pour pré-approuver automatiquement si tout est OK (optionnel)
+  auto-approve:
+    runs-on: ubuntu-latest
+    needs: validate-datasets
+    if: github.event_name == 'pull_request' && needs.validate-datasets.outputs.validation-status == 'success' && github.actor != github.repository_owner
+    
+    steps:
+    - name: 🎯 Auto-approve high-quality datasets
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const errorCount = parseInt('${{ needs.validate-datasets.outputs.error-count }}');
+          const warningCount = parseInt('${{ needs.validate-datasets.outputs.warning-count }}');
+          
+          // Auto-approve seulement si 0 erreurs et < 3 warnings
+          if (errorCount === 0 && warningCount <= 2) {
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'APPROVE',
+                body: '🤖 **Auto-approval**: Dataset validation passed with excellent quality!\n\n✅ 0 errors, minimal warnings\n🚀 Ready for automatic merge and training'
+              });
+              
+              // Ajouter un label pour faciliter l'identification
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: ['auto-approved', 'high-quality-dataset']
+              });
+              
+            } catch (error) {
+              console.log('Auto-approval failed (probably missing permissions):', error.message);
+            }
+          }
