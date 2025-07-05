@@ -64,27 +64,18 @@ jobs:
     - name: 📦 Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        
-        # Purger le cache pip pour éviter les conflits de versions
         pip cache purge
-        
-        # PyTorch avec CPU (plus léger pour tests)
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        
-        # Transformers avec version fixée (≥4.40 pour evaluation_strategy)
         pip install "transformers[torch]==4.41.0" datasets==2.19.1 accelerate==0.30.1 evaluate==0.4.2
-        
-        # Autres dépendances avec versions stables
         pip install scikit-learn==1.4.2 pandas==2.2.2 numpy==1.26.4
         pip install huggingface_hub==0.23.0 tensorboard==2.16.2
         
-        # Requirements.txt en override si présent
         if [ -f requirements.txt ]; then
           echo "📋 Installing additional requirements..."
           pip install -r requirements.txt
         fi
         
-        # Affichage des versions + check evaluation_strategy
+        # ── Vérifications de version sans casser le YAML ──
         python - << 'PY'
 import transformers, torch, datasets, sys
 print(f"✅ Transformers: {transformers.__version__}")
@@ -128,7 +119,6 @@ PY
         echo "✅ Dataset file found: $DATASET_FILE"
         echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
         
-        # Aperçu du contenu
         echo "👀 Dataset preview:"
         head -3 "$DATASET_FILE"
 
@@ -148,12 +138,10 @@ PY
         echo "  Learning Rate: $LEARNING_RATE"
         echo "  Push to Hub: $PUSH_TO_HUB"
         
-        # Créer le répertoire de sortie avec timestamp
         OUTPUT_DIR="models/finbert-$(date +%Y%m%d_%H%M%S)"
         mkdir -p "$OUTPUT_DIR"
         echo "📁 Output directory: $OUTPUT_DIR"
         
-        # Préparer les arguments pour le script
         ARGS="--dataset datasets/$DATASET --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --epochs $EPOCHS --lr $LEARNING_RATE"
         
         if [ "$PUSH_TO_HUB" = "true" ]; then
@@ -164,7 +152,6 @@ PY
         
         echo "🔥 Launching training with args: $ARGS"
         
-        # Lancer le script avec gestion d'erreur
         python scripts/finetune.py $ARGS || {
           echo "❌ Training failed, showing logs..."
           [ -f finetune.log ] && tail -20 finetune.log
@@ -179,7 +166,6 @@ PY
         echo "📊 Training Summary:"
         echo "===================="
         
-        # Chercher et afficher les rapports de training
         if find models/ -name "training_report.json" -type f | head -1 | grep -q .; then
           echo "📄 Training reports found:"
           find models/ -name "training_report.json" -exec echo "  📋 {}" \;
@@ -228,7 +214,6 @@ PY
           echo "🚀 Model pushed to HuggingFace Hub"
         fi
         
-        # Résumé final
         echo ""
         echo "📋 Final Summary:"
         echo "  Dataset: ${{ github.event.inputs.dataset }}"
