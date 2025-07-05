@@ -37,6 +37,12 @@ on:
         required: true
         default: false
         type: boolean
+      
+      retrain_label:
+        description: 'Force retrain even without new dataset'
+        required: false
+        default: false
+        type: boolean
 
   # Déclenchement sur push dans datasets/ (après validation quality gate)
   push:
@@ -44,17 +50,98 @@ on:
       - 'datasets/**.csv'
       - 'datasets/**.json'
       - 'scripts/finetune.py'
+      
+  # Déclenchement après succès du Quality Gate (pour PRs)
+  workflow_run:
+    workflows: ["🔍 Dataset Quality Gate"]
+    types:
+      - completed
+    branches: [main]
 
 jobs:
+  # Job de vérification des prérequis
+  check-prerequisites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+      trigger-reason: ${{ steps.check.outputs.trigger-reason }}
+      dataset-changed: ${{ steps.check.outputs.dataset-changed }}
+      
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 2  # Pour comparer avec le commit précédent
+    
+    - name: 🔍 Check Prerequisites
+      id: check
+      run: |
+        set -euo pipefail
+        
+        SHOULD_RUN=false
+        TRIGGER_REASON=""
+        DATASET_CHANGED=false
+        
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          SHOULD_RUN=true
+          TRIGGER_REASON="Manual trigger"
+          
+          # Vérifier si c'est un retrain forcé
+          if [ "${{ github.event.inputs.retrain_label }}" = "true" ]; then
+            TRIGGER_REASON="Manual retrain (force)"
+          fi
+          
+        elif [ "${{ github.event_name }}" = "push" ]; then
+          # Vérifier si des datasets ont changé
+          if git diff --name-only HEAD~1 HEAD | grep -E '^datasets/.*\.(csv|json)$'; then
+            SHOULD_RUN=true
+            TRIGGER_REASON="Dataset files modified"
+            DATASET_CHANGED=true
+          elif git diff --name-only HEAD~1 HEAD | grep '^scripts/finetune.py$'; then
+            SHOULD_RUN=true
+            TRIGGER_REASON="Fine-tuning script modified"
+          fi
+          
+        elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+          # Vérifier si le Quality Gate a réussi
+          if [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            SHOULD_RUN=true
+            TRIGGER_REASON="Quality Gate passed"
+            DATASET_CHANGED=true
+          else
+            echo "⚠️ Quality Gate failed, skipping fine-tuning"
+          fi
+        fi
+        
+        echo "should-run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+        echo "trigger-reason=$TRIGGER_REASON" >> $GITHUB_OUTPUT  
+        echo "dataset-changed=$DATASET_CHANGED" >> $GITHUB_OUTPUT
+        
+        echo "🔍 Prerequisites check:"
+        echo "  Should run: $SHOULD_RUN"
+        echo "  Reason: $TRIGGER_REASON"
+        echo "  Dataset changed: $DATASET_CHANGED"
+
   finetune:
     runs-on: ubuntu-latest
     timeout-minutes: 120  # 2 heures max
+    needs: check-prerequisites
+    if: needs.check-prerequisites.outputs.should-run == 'true'
+    
+    outputs:
+      model-path: ${{ steps.training.outputs.model-path }}
+      model-name: ${{ steps.training.outputs.model-name }}
+      hf-model-id: ${{ steps.training.outputs.hf-model-id }}
+      training-metrics: ${{ steps.training.outputs.training-metrics }}
 
     steps:
     - name: 📥 Checkout Repository
       uses: actions/checkout@v4
       with:
         lfs: true
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 🐍 Setup Python 3.9
       uses: actions/setup-python@v4
@@ -63,16 +150,20 @@ jobs:
         cache: 'pip'
 
     - name: 🔧 Smart Dataset Selection
+      id: dataset-selection
       run: |
+        set -euo pipefail
+        
         echo "🎯 Selecting dataset for training..."
+        echo "Trigger reason: ${{ needs.check-prerequisites.outputs.trigger-reason }}"
         
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           MANUAL_DATASET="${{ github.event.inputs.dataset }}"
           
           if [ "$MANUAL_DATASET" = "auto-latest" ]; then
             echo "🔍 Auto-selecting latest dataset..."
-            # Sélectionner le dernier CSV ajouté (par date de modification)
-            LATEST_CSV=$(find datasets/ -name "*.csv" -type f -exec ls -t {} + | head -1 | xargs basename)
+            # Sélectionner le dernier CSV par date de modification
+            LATEST_CSV=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
             if [ -z "$LATEST_CSV" ]; then
               echo "❌ No CSV files found in datasets/"
               exit 1
@@ -89,19 +180,25 @@ jobs:
           echo "LEARNING_RATE=${{ github.event.inputs.learning_rate }}" >> $GITHUB_ENV
           echo "PUSH_TO_HUB=${{ github.event.inputs.push_to_hub }}" >> $GITHUB_ENV
         else
-          # Déclenchement automatique après push
+          # Déclenchement automatique après push ou Quality Gate
           echo "🔄 Auto-trigger mode: selecting latest dataset..."
           
-          # Trouver le dernier dataset modifié/ajouté
-          CHANGED_DATASETS=$(git diff --name-only HEAD~1 HEAD | grep -E '^datasets/.*\.(csv|json)$' || true)
-          
-          if [ -n "$CHANGED_DATASETS" ]; then
-            # Prendre le premier dataset modifié
-            DATASET_FILE=$(echo "$CHANGED_DATASETS" | head -1 | xargs basename)
-            echo "📝 Using modified dataset: $DATASET_FILE"
+          # Prioriser les datasets récemment modifiés
+          if [ "${{ needs.check-prerequisites.outputs.dataset-changed }}" = "true" ]; then
+            CHANGED_DATASETS=$(git diff --name-only HEAD~1 HEAD | grep -E '^datasets/.*\.(csv|json)$' || true)
+            
+            if [ -n "$CHANGED_DATASETS" ]; then
+              # Prendre le premier dataset modifié
+              DATASET_FILE=$(echo "$CHANGED_DATASETS" | head -1 | xargs basename)
+              echo "📝 Using recently modified dataset: $DATASET_FILE"
+            else
+              # Fallback: prendre le plus récent CSV
+              DATASET_FILE=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
+              echo "📊 Using latest available dataset: $DATASET_FILE"
+            fi
           else
-            # Fallback: prendre le plus récent CSV
-            DATASET_FILE=$(find datasets/ -name "*.csv" -type f -exec ls -t {} + | head -1 | xargs basename)
+            # Pas de changement de dataset, prendre le plus récent
+            DATASET_FILE=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
             echo "📊 Using latest available dataset: $DATASET_FILE"
           fi
           
@@ -117,17 +214,28 @@ jobs:
           echo "PUSH_TO_HUB=false" >> $GITHUB_ENV
         fi
         
+        # Générer un nom de modèle unique avec timestamp
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        MODEL_NAME_CLEAN=$(echo "$MODEL_NAME" | sed 's/[^a-zA-Z0-9]/-/g')
+        UNIQUE_MODEL_NAME="finbert-${MODEL_NAME_CLEAN}-${TIMESTAMP}"
+        
+        echo "UNIQUE_MODEL_NAME=$UNIQUE_MODEL_NAME" >> $GITHUB_ENV
+        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+        
         echo ""
         echo "🔧 Final configuration:"
-        echo "  Trigger: ${{ github.event_name }}"
+        echo "  Trigger: ${{ github.event_name }} (${{ needs.check-prerequisites.outputs.trigger-reason }})"
         echo "  Dataset: $DATASET"
         echo "  Model: $MODEL_NAME"
+        echo "  Model name: $UNIQUE_MODEL_NAME"
         echo "  Epochs: $EPOCHS"
         echo "  Learning Rate: $LEARNING_RATE"
         echo "  Push to Hub: $PUSH_TO_HUB"
 
     - name: 📦 Install Dependencies
       run: |
+        set -euo pipefail
+        
         python -m pip install --upgrade pip
         pip cache purge
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
@@ -140,7 +248,7 @@ jobs:
           pip install -r requirements.txt
         fi
         
-        # ── Vérifications de version ──
+        # Vérifications de version avec logging amélioré
         python - <<'PY'
         import transformers, torch, datasets, sys
         print(f"✅ Transformers: {transformers.__version__}")
@@ -161,6 +269,8 @@ jobs:
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
+        set -euo pipefail
+        
         if [ -z "$HF_TOKEN" ]; then
           echo "❌ HF_TOKEN required for push_to_hub=true"
           echo "💡 Add HF_TOKEN to repository secrets in Settings > Secrets"
@@ -178,6 +288,8 @@ jobs:
 
     - name: 🔍 Validate Dataset Quality
       run: |
+        set -euo pipefail
+        
         DATASET_FILE="datasets/$DATASET"
         echo "🧪 Validating dataset quality: $DATASET_FILE"
         
@@ -191,31 +303,44 @@ jobs:
         echo "✅ Dataset file found: $DATASET_FILE"
         echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
         
-        # Utiliser notre script de validation
+        # Validation détaillée avec rapport JSON
         if [ -f "scripts/validate_dataset.py" ]; then
           echo "🔍 Running comprehensive validation..."
-          python scripts/validate_dataset.py "$DATASET_FILE" || {
+          if python scripts/validate_dataset.py "$DATASET_FILE" --output-json "pre_training_validation.json"; then
+            echo "✅ Dataset validation passed!"
+            
+            # Extraire et afficher les stats principales
+            python - <<'PY'
+        import json
+        try:
+            with open("pre_training_validation.json", "r") as f:
+                report = json.load(f)
+            stats = report.get("statistics", {})
+            print(f"📊 Dataset stats:")
+            print(f"  - Samples: {stats.get('total_samples', 'N/A')}")
+            print(f"  - Valid samples: {stats.get('valid_samples', 'N/A')}")
+            print(f"  - Avg length: {stats.get('avg_text_length', 0):.1f} chars")
+            print(f"  - Distribution: {stats.get('label_distribution', {})}")
+        except Exception as e:
+            print(f"Could not parse validation report: {e}")
+        PY
+          else
             echo "❌ Dataset validation failed!"
-            echo "💡 Fix the issues above before proceeding with training"
+            echo "💡 Please fix the dataset quality issues"
             exit 1
-          }
-          echo "✅ Dataset validation passed!"
+          fi
         else
           echo "⚠️ Validation script not found, using basic checks..."
           # Validation basique pour compatibilité
           echo "👀 Dataset preview:"
           head -3 "$DATASET_FILE"
-          
-          if [[ "$DATASET_FILE" == *.csv ]]; then
-            if ! head -1 "$DATASET_FILE" | grep -q "text.*label"; then
-              echo "⚠️ CSV header should contain 'text' and 'label' columns"
-              echo "📋 Current header: $(head -1 "$DATASET_FILE")"
-            fi
-          fi
         fi
 
     - name: 🤖 Run Fine-tuning
+      id: training
       run: |
+        set -euo pipefail
+        
         echo "🚀 Starting FinBERT fine-tuning..."
         echo "📋 Configuration:"
         echo "  Dataset: $DATASET"
@@ -223,41 +348,105 @@ jobs:
         echo "  Epochs: $EPOCHS"
         echo "  Learning Rate: $LEARNING_RATE"
         echo "  Push to Hub: $PUSH_TO_HUB"
+        echo "  Unique name: $UNIQUE_MODEL_NAME"
         
-        OUTPUT_DIR="models/finbert-$(date +%Y%m%d_%H%M%S)"
+        OUTPUT_DIR="models/$UNIQUE_MODEL_NAME"
         mkdir -p "$OUTPUT_DIR"
         echo "📁 Output directory: $OUTPUT_DIR"
         
+        # Construire les arguments du script
         ARGS="--dataset datasets/$DATASET --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --epochs $EPOCHS --lr $LEARNING_RATE"
         
+        HF_MODEL_ID=""
         if [ "$PUSH_TO_HUB" = "true" ]; then
-          HUB_ID="Bencode92/tradepulse-finbert-$(date +%Y%m%d-%H%M)"
-          ARGS="$ARGS --push --hub_id $HUB_ID"
-          echo "🚀 Will push to HuggingFace Hub as: $HUB_ID"
+          HF_MODEL_ID="Bencode92/tradepulse-$UNIQUE_MODEL_NAME"
+          ARGS="$ARGS --push --hub_id $HF_MODEL_ID"
+          echo "🚀 Will push to HuggingFace Hub as: $HF_MODEL_ID"
         fi
         
         echo "🔥 Launching training with args: $ARGS"
         
-        python scripts/finetune.py $ARGS || {
+        # Exécuter le fine-tuning avec gestion d'erreur robuste
+        if python scripts/finetune.py $ARGS; then
+          echo "✅ Training completed successfully!"
+          
+          # Extraire les métriques du rapport
+          if [ -f "$OUTPUT_DIR/training_report.json" ]; then
+            METRICS=$(cat "$OUTPUT_DIR/training_report.json" | jq -c '.metrics // {}')
+            echo "training-metrics=$METRICS" >> $GITHUB_OUTPUT
+            
+            # Afficher les métriques principales
+            echo "📊 Training metrics:"
+            cat "$OUTPUT_DIR/training_report.json" | jq '.metrics' || echo "Could not parse metrics"
+          else
+            echo "training-metrics={}" >> $GITHUB_OUTPUT
+            echo "⚠️ No training report found"
+          fi
+          
+          # Outputs pour les jobs suivants
+          echo "model-path=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          echo "model-name=$UNIQUE_MODEL_NAME" >> $GITHUB_OUTPUT
+          echo "hf-model-id=$HF_MODEL_ID" >> $GITHUB_OUTPUT
+          
+        else
           echo "❌ Training failed, showing logs..."
-          [ -f finetune.log ] && tail -20 finetune.log
+          [ -f finetune.log ] && tail -50 finetune.log
           exit 1
-        }
-        
-        echo "✅ Training completed successfully!"
+        fi
 
-    - name: 📈 Training Summary
+    - name: 🏷️ Create Git Tag for Model Version
+      if: success()
+      run: |
+        set -euo pipefail
+        
+        # Créer un tag Git pour traçabilité
+        TAG_NAME="model-$UNIQUE_MODEL_NAME"
+        
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Créer le tag avec métadonnées
+        TAG_MESSAGE="🤖 Model trained: $UNIQUE_MODEL_NAME
+        
+        📊 Training details:
+        - Dataset: $DATASET
+        - Base model: $MODEL_NAME  
+        - Epochs: $EPOCHS
+        - Learning rate: $LEARNING_RATE
+        - Timestamp: $TIMESTAMP
+        - Commit: ${{ github.sha }}
+        $(if [ "$PUSH_TO_HUB" = "true" ]; then echo "- HuggingFace: $HF_MODEL_ID"; fi)
+        
+        🚀 Generated by TradePulse ML Pipeline"
+        
+        git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
+        git push origin "$TAG_NAME"
+        
+        echo "✅ Created Git tag: $TAG_NAME"
+
+    - name: 📈 Enhanced Training Summary
       if: always()
       run: |
-        echo "📊 Training Summary:"
-        echo "===================="
+        set -euo pipefail
+        
+        echo "📊 Enhanced Training Summary"
+        echo "============================"
+        echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+        echo "🔗 Commit: ${{ github.sha }}"
+        echo "🎯 Trigger: ${{ needs.check-prerequisites.outputs.trigger-reason }}"
+        echo "📦 Model: $UNIQUE_MODEL_NAME"
+        echo ""
         
         if find models/ -name "training_report.json" -type f | head -1 | grep -q .; then
           echo "📄 Training reports found:"
           find models/ -name "training_report.json" -exec echo "  📋 {}" \;
           echo ""
+          
           echo "📈 Latest training metrics:"
-          find models/ -name "training_report.json" -exec cat {} \; | head -50
+          LATEST_REPORT=$(find models/ -name "training_report.json" -exec ls -t {} + | head -1)
+          if [ -f "$LATEST_REPORT" ]; then
+            cat "$LATEST_REPORT" | jq '.' || cat "$LATEST_REPORT"
+          fi
         else
           echo "⚠️ No training report found"
         fi
@@ -267,42 +456,123 @@ jobs:
         find models/ -type d -name "finbert-*" | head -5 || echo "No model directories found"
         
         echo ""
+        echo "🏷️ Git tags created:"
+        git tag -l "model-*" | tail -3 || echo "No model tags found"
+        
+        echo ""
         echo "📝 Log files:"
         ls -la *.log 2>/dev/null || echo "No log files found"
 
-    - name: 📤 Upload Model Artifacts
+    - name: 📤 Upload Enhanced Model Artifacts
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: tradepulse-finbert-${{ github.run_id }}
+        name: ${{ env.UNIQUE_MODEL_NAME }}-${{ github.run_id }}
         path: |
-          models/**
+          models/${{ env.UNIQUE_MODEL_NAME }}/**
+          pre_training_validation.json
           finetune.log
-        retention-days: 30
+        retention-days: 90  # Garder plus longtemps pour les modèles
 
-    - name: 📤 Upload Logs
+    - name: 📤 Upload Training Logs
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: training-logs-${{ github.run_id }}
+        name: training-logs-${{ env.UNIQUE_MODEL_NAME }}-${{ github.run_id }}
         path: |
           finetune.log
           models/**/logs/**
-        retention-days: 7
+          pre_training_validation.json
+        retention-days: 30
 
-    - name: 🎉 Success Notification
+    - name: 🎉 Success Notification with Links
       if: success()
       run: |
         echo "✅ Fine-tuning completed successfully!"
+        echo "🎯 Trigger: ${{ needs.check-prerequisites.outputs.trigger-reason }}"
+        echo "📦 Model: $UNIQUE_MODEL_NAME"
+        echo "📁 Model path: models/$UNIQUE_MODEL_NAME"
         echo "🔍 Check the 'Actions' tab for downloadable artifacts"
-        echo "📊 Model saved in: $(find models/ -type d -name "finbert-*" | head -1)"
-        if [ "$PUSH_TO_HUB" = "true" ]; then
-          echo "🚀 Model pushed to HuggingFace Hub"
+        
+        if [ "$PUSH_TO_HUB" = "true" ] && [ -n "$HF_MODEL_ID" ]; then
+          echo ""
+          echo "🚀 Model pushed to HuggingFace Hub:"
+          echo "   📎 https://huggingface.co/$HF_MODEL_ID"
+          echo "   🔬 Test in Colab: https://colab.research.google.com/github/huggingface/notebooks/blob/main/transformers_doc/en/task_summary.ipynb"
         fi
         
         echo ""
+        echo "🏷️ Git tag created: model-$UNIQUE_MODEL_NAME"
+        echo "📊 View tag: https://github.com/${{ github.repository }}/tags"
+        echo ""
         echo "📋 Final Summary:"
         echo "  Dataset: $DATASET"
-        echo "  Model: $MODEL_NAME"
+        echo "  Base model: $MODEL_NAME"
         echo "  Epochs: $EPOCHS"
         echo "  Status: SUCCESS ✅"
+        echo ""
+        echo "🔄 Next steps:"
+        echo "  - Download artifacts for local testing"
+        echo "  - Integrate model in TradePulse main application"
+        echo "  - Monitor performance on real financial data"
+
+  # Job pour créer une Release GitHub si push vers HuggingFace réussi
+  create-release:
+    runs-on: ubuntu-latest
+    needs: [check-prerequisites, finetune]
+    if: success() && github.event.inputs.push_to_hub == 'true' && needs.finetune.outputs.hf-model-id != ''
+    
+    steps:
+    - name: 🚀 Create GitHub Release
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const modelName = '${{ needs.finetune.outputs.model-name }}';
+          const hfModelId = '${{ needs.finetune.outputs.hf-model-id }}';
+          const metrics = JSON.parse('${{ needs.finetune.outputs.training-metrics }}' || '{}');
+          
+          const tagName = `model-${modelName}`;
+          const releaseName = `🤖 TradePulse FinBERT Model: ${modelName}`;
+          
+          const releaseBody = `# 🤖 TradePulse FinBERT Fine-tuned Model
+          
+          **Model ID:** \`${modelName}\`
+          **HuggingFace:** [${hfModelId}](https://huggingface.co/${hfModelId})
+          
+          ## 📊 Training Metrics
+          ${Object.keys(metrics).length > 0 ? 
+            Object.entries(metrics).map(([key, value]) => `- **${key}**: ${typeof value === 'number' ? value.toFixed(4) : value}`).join('\n') 
+            : 'Metrics not available'}
+          
+          ## 🚀 Usage
+          
+          \`\`\`python
+          from transformers import pipeline
+          
+          # Load the model
+          classifier = pipeline("text-classification", model="${hfModelId}")
+          
+          # Analyze financial text
+          result = classifier("Apple reported strong quarterly earnings")
+          print(result)
+          \`\`\`
+          
+          ## 📋 Details
+          - **Trigger:** ${{ needs.check-prerequisites.outputs.trigger-reason }}
+          - **Dataset:** ${{ env.DATASET }}
+          - **Base model:** ${{ env.MODEL_NAME }}
+          - **Training time:** $(date -u)
+          - **Commit:** ${{ github.sha }}
+          
+          ---
+          *Generated automatically by TradePulse ML Pipeline* 🤖`;
+          
+          await github.rest.repos.createRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            tag_name: tagName,
+            name: releaseName,
+            body: releaseBody,
+            draft: false,
+            prerelease: false
+          });
