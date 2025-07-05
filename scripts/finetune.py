@@ -13,7 +13,7 @@ TradePulse – FinBERT Fine‑Tuning Utility (clean version)
 
 Exemple :
 ----------
-$ python finetune_tradepulse.py \
+$ python finetune.py \
     --dataset datasets/news_20250705.csv \
     --output_dir models/finbert-v1 \
     --model_name yiyanghkust/finbert-tone
@@ -48,9 +48,14 @@ from transformers import (
 # Logging
 # ---------------------------------------------------------------------------
 LOG_FMT = "%(asctime)s — %(levelname)s — %(message)s"
-logging.basicConfig(level=logging.INFO, format=LOG_FMT,
-                    handlers=[logging.FileHandler("finetune.log"),
-                              logging.StreamHandler()])
+logging.basicConfig(
+    level=logging.INFO, 
+    format=LOG_FMT,
+    handlers=[
+        logging.FileHandler("finetune.log"),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger("tradepulse-finetune")
 
 # ---------------------------------------------------------------------------
