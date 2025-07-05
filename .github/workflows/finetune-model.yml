@@ -64,14 +64,42 @@ jobs:
     - name: 📦 Install Dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install "transformers[torch]" datasets accelerate evaluate
-        pip install scikit-learn pandas numpy huggingface_hub tensorboard
         
-        # Si requirements.txt existe
+        # Purger le cache pip pour éviter les conflits de versions
+        pip cache purge
+        
+        # PyTorch avec CPU (plus léger pour tests)
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        
+        # Transformers avec version fixée (≥4.40 pour evaluation_strategy)
+        pip install "transformers[torch]==4.41.0" datasets==2.19.1 accelerate==0.30.1 evaluate==0.4.2
+        
+        # Autres dépendances avec versions stables
+        pip install scikit-learn==1.4.2 pandas==2.2.2 numpy==1.26.4
+        pip install huggingface_hub==0.23.0 tensorboard==2.16.2
+        
+        # Requirements.txt en override si présent
         if [ -f requirements.txt ]; then
+          echo "📋 Installing additional requirements..."
           pip install -r requirements.txt
         fi
+        
+        # Vérification des versions critiques
+        python -c "
+        import transformers, torch, datasets
+        print(f'✅ Transformers: {transformers.__version__}')
+        print(f'✅ PyTorch: {torch.__version__}')
+        print(f'✅ Datasets: {datasets.__version__}')
+        
+        # Vérifier que evaluation_strategy est supporté
+        from transformers import TrainingArguments
+        try:
+            args = TrainingArguments(output_dir='/tmp', evaluation_strategy='epoch')
+            print('✅ evaluation_strategy parameter supported')
+        except Exception as e:
+            print(f'❌ evaluation_strategy error: {e}')
+            exit(1)
+        "
 
     - name: 🔐 Setup HuggingFace Token
       if: github.event.inputs.push_to_hub == 'true'
@@ -103,6 +131,10 @@ jobs:
         
         echo "✅ Dataset file found: $DATASET_FILE"
         echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
+        
+        # Aperçu du contenu
+        echo "👀 Dataset preview:"
+        head -3 "$DATASET_FILE"
 
     - name: 🤖 Run Fine-tuning
       env:
@@ -120,9 +152,10 @@ jobs:
         echo "  Learning Rate: $LEARNING_RATE"
         echo "  Push to Hub: $PUSH_TO_HUB"
         
-        # Créer le répertoire de sortie
+        # Créer le répertoire de sortie avec timestamp
         OUTPUT_DIR="models/finbert-$(date +%Y%m%d_%H%M%S)"
         mkdir -p "$OUTPUT_DIR"
+        echo "📁 Output directory: $OUTPUT_DIR"
         
         # Préparer les arguments pour le script
         ARGS="--dataset datasets/$DATASET --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --epochs $EPOCHS --lr $LEARNING_RATE"
@@ -130,28 +163,48 @@ jobs:
         if [ "$PUSH_TO_HUB" = "true" ]; then
           HUB_ID="Bencode92/tradepulse-finbert-$(date +%Y%m%d)"
           ARGS="$ARGS --push --hub_id $HUB_ID"
+          echo "🚀 Will push to HuggingFace Hub as: $HUB_ID"
         fi
         
-        # Lancer le script
-        python scripts/finetune.py $ARGS
+        echo "🔥 Launching training with args: $ARGS"
+        
+        # Lancer le script avec gestion d'erreur
+        python scripts/finetune.py $ARGS || {
+          echo "❌ Training failed, showing logs..."
+          [ -f finetune.log ] && tail -20 finetune.log
+          exit 1
+        }
+        
+        echo "✅ Training completed successfully!"
 
     - name: 📈 Training Summary
       if: always()
       run: |
         echo "📊 Training Summary:"
+        echo "===================="
         
-        # Chercher les rapports de training
-        find models/ -name "training_report.json" -exec echo "📄 Report found: {}" \;
-        find models/ -name "training_report.json" -exec cat {} \;
+        # Chercher et afficher les rapports de training
+        if find models/ -name "training_report.json" -type f | head -1 | grep -q .; then
+          echo "📄 Training reports found:"
+          find models/ -name "training_report.json" -exec echo "  📋 {}" \;
+          echo ""
+          echo "📈 Latest training metrics:"
+          find models/ -name "training_report.json" -exec cat {} \; | head -50
+        else
+          echo "⚠️ No training report found"
+        fi
         
-        # Afficher la structure des modèles créés
         echo ""
-        echo "📁 Generated models:"
-        find models/ -type d -name "finbert-*" | head -5
+        echo "📁 Generated model directories:"
+        find models/ -type d -name "finbert-*" | head -5 || echo "No model directories found"
+        
+        echo ""
+        echo "📝 Log files:"
+        ls -la *.log 2>/dev/null || echo "No log files found"
 
     - name: 📤 Upload Model Artifacts
       if: success()
-      uses: actions/upload-artifact@v4  # ← CORRIGÉ: v3 → v4
+      uses: actions/upload-artifact@v4
       with:
         name: tradepulse-finbert-${{ github.run_id }}
         path: |
@@ -161,7 +214,7 @@ jobs:
 
     - name: 📤 Upload Logs
       if: always()
-      uses: actions/upload-artifact@v4  # ← CORRIGÉ: v3 → v4
+      uses: actions/upload-artifact@v4
       with:
         name: training-logs-${{ github.run_id }}
         path: |
@@ -173,7 +226,16 @@ jobs:
       if: success()
       run: |
         echo "✅ Fine-tuning completed successfully!"
-        echo "🔍 Check the 'Actions' tab for artifacts"
+        echo "🔍 Check the 'Actions' tab for downloadable artifacts"
+        echo "📊 Model saved in: $(find models/ -type d -name "finbert-*" | head -1)"
         if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
           echo "🚀 Model pushed to HuggingFace Hub"
         fi
+        
+        # Résumé final
+        echo ""
+        echo "📋 Final Summary:"
+        echo "  Dataset: ${{ github.event.inputs.dataset }}"
+        echo "  Model: ${{ github.event.inputs.model_name }}"
+        echo "  Epochs: ${{ github.event.inputs.epochs }}"
+        echo "  Status: SUCCESS ✅"
