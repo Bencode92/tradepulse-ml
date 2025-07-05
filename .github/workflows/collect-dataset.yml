@@ -235,10 +235,10 @@ jobs:
         TODAY=$(TZ='Europe/Paris' date '+%Y-%m-%d')
         FULL_TIMESTAMP=$(TZ='Europe/Paris' date '+%Y-%m-%d %H:%M:%S %Z')
         
-        # Diagnostic AVANT git add
+        # Diagnostic AVANT git add (safe commands with || true)
         echo "🔍 Diagnostic Git AVANT git add:"
         echo "  Working directory status:"
-        git status --porcelain | head -10
+        git status --porcelain | head -10 || true
         echo "  Dataset file exists: $([ -f "$DATASET_PATH" ] && echo "✅ YES" || echo "❌ NO")"
         if [ -f "$DATASET_PATH" ]; then
           echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
@@ -248,13 +248,15 @@ jobs:
         echo "🔧 Executing: git add datasets/"
         git add datasets/
         
-        # Diagnostic APRÈS git add
+        # Diagnostic APRÈS git add (corrected: no --staged option for git status)
         echo ""
         echo "🔍 Diagnostic Git APRÈS git add:"
-        echo "  Staged files:"
-        git diff --staged --name-only | head -10
-        echo "  Staged status:"
-        git status --porcelain --staged | head -10
+        echo "  Staged files (via git diff):"
+        git diff --staged --name-only | head -10 || true
+        echo "  Working directory status:"
+        git status --porcelain | head -10 || true
+        echo "  Index status (files staged for commit):"
+        git diff --cached --name-only | head -10 || true
         
         # Vérifier s'il y a des changements - logique intelligente
         HAS_CHANGES=false
@@ -262,7 +264,7 @@ jobs:
           HAS_CHANGES=true
           echo "✅ Changements détectés dans l'index Git"
           echo "📋 Fichiers à committer:"
-          git diff --staged --name-only
+          git diff --staged --name-only || true
         else
           echo "⚠️ AUCUN changement détecté dans l'index Git"
           echo "🔍 Cause possible:"
@@ -270,10 +272,10 @@ jobs:
           echo "  2. Fichier bloqué par .gitignore"
           echo "  3. Problème de permissions"
           
-          # Test de diagnostic .gitignore
+          # Test de diagnostic .gitignore (safe with || true)
           echo ""
           echo "🕵️ Test .gitignore pour $DATASET_PATH:"
-          if git check-ignore "$DATASET_PATH"; then
+          if git check-ignore "$DATASET_PATH" 2>/dev/null; then
             echo "❌ PROBLÈME: Le fichier est ignoré par .gitignore"
             echo "💡 Solution: Vérifiez les règles dans .gitignore"
           else
