@@ -7,7 +7,7 @@ on:
       dataset:
         description: 'Dataset filename (in datasets/ folder)'
         required: true
-        default: 'news_20250705.csv'
+        default: 'auto-latest'
         type: string
       
       model_name:
@@ -38,10 +38,11 @@ on:
         default: false
         type: boolean
 
-  # Déclenchement sur push dans datasets/
+  # Déclenchement sur push dans datasets/ (après validation quality gate)
   push:
     paths:
-      - 'datasets/**'
+      - 'datasets/**.csv'
+      - 'datasets/**.json'
       - 'scripts/finetune.py'
 
 jobs:
@@ -61,25 +62,63 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
-    - name: 🔧 Set Environment Variables
+    - name: 🔧 Smart Dataset Selection
       run: |
-        # Pour les déclenchements manuels (workflow_dispatch)
+        echo "🎯 Selecting dataset for training..."
+        
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "DATASET=${{ github.event.inputs.dataset }}" >> $GITHUB_ENV
+          MANUAL_DATASET="${{ github.event.inputs.dataset }}"
+          
+          if [ "$MANUAL_DATASET" = "auto-latest" ]; then
+            echo "🔍 Auto-selecting latest dataset..."
+            # Sélectionner le dernier CSV ajouté (par date de modification)
+            LATEST_CSV=$(find datasets/ -name "*.csv" -type f -exec ls -t {} + | head -1 | xargs basename)
+            if [ -z "$LATEST_CSV" ]; then
+              echo "❌ No CSV files found in datasets/"
+              exit 1
+            fi
+            echo "DATASET=$LATEST_CSV" >> $GITHUB_ENV
+            echo "📊 Auto-selected dataset: $LATEST_CSV"
+          else
+            echo "DATASET=$MANUAL_DATASET" >> $GITHUB_ENV
+            echo "📊 Manual dataset: $MANUAL_DATASET"
+          fi
+          
           echo "MODEL_NAME=${{ github.event.inputs.model_name }}" >> $GITHUB_ENV
           echo "EPOCHS=${{ github.event.inputs.epochs }}" >> $GITHUB_ENV
           echo "LEARNING_RATE=${{ github.event.inputs.learning_rate }}" >> $GITHUB_ENV
           echo "PUSH_TO_HUB=${{ github.event.inputs.push_to_hub }}" >> $GITHUB_ENV
         else
-          # Pour les déclenchements automatiques (push)
-          echo "DATASET=news_20250705.csv" >> $GITHUB_ENV
+          # Déclenchement automatique après push
+          echo "🔄 Auto-trigger mode: selecting latest dataset..."
+          
+          # Trouver le dernier dataset modifié/ajouté
+          CHANGED_DATASETS=$(git diff --name-only HEAD~1 HEAD | grep -E '^datasets/.*\.(csv|json)$' || true)
+          
+          if [ -n "$CHANGED_DATASETS" ]; then
+            # Prendre le premier dataset modifié
+            DATASET_FILE=$(echo "$CHANGED_DATASETS" | head -1 | xargs basename)
+            echo "📝 Using modified dataset: $DATASET_FILE"
+          else
+            # Fallback: prendre le plus récent CSV
+            DATASET_FILE=$(find datasets/ -name "*.csv" -type f -exec ls -t {} + | head -1 | xargs basename)
+            echo "📊 Using latest available dataset: $DATASET_FILE"
+          fi
+          
+          if [ -z "$DATASET_FILE" ]; then
+            echo "❌ No suitable dataset found"
+            exit 1
+          fi
+          
+          echo "DATASET=$DATASET_FILE" >> $GITHUB_ENV
           echo "MODEL_NAME=yiyanghkust/finbert-tone" >> $GITHUB_ENV
           echo "EPOCHS=3" >> $GITHUB_ENV
           echo "LEARNING_RATE=2e-5" >> $GITHUB_ENV
           echo "PUSH_TO_HUB=false" >> $GITHUB_ENV
         fi
         
-        echo "🔧 Environment variables set:"
+        echo ""
+        echo "🔧 Final configuration:"
         echo "  Trigger: ${{ github.event_name }}"
         echo "  Dataset: $DATASET"
         echo "  Model: $MODEL_NAME"
@@ -101,7 +140,7 @@ jobs:
           pip install -r requirements.txt
         fi
         
-        # ── Vérifications de version sans casser le YAML ──
+        # ── Vérifications de version ──
         python - <<'PY'
         import transformers, torch, datasets, sys
         print(f"✅ Transformers: {transformers.__version__}")
@@ -128,7 +167,6 @@ jobs:
           exit 1
         fi
         
-        # Version corrigée de la commande login
         huggingface-cli login --token "$HF_TOKEN"
         echo "✅ HuggingFace authentication successful"
         
@@ -138,30 +176,41 @@ jobs:
           exit 1
         }
 
-    - name: 📊 Validate Dataset
+    - name: 🔍 Validate Dataset Quality
       run: |
         DATASET_FILE="datasets/$DATASET"
-        echo "🔍 Checking dataset: $DATASET_FILE"
+        echo "🧪 Validating dataset quality: $DATASET_FILE"
         
         if [ ! -f "$DATASET_FILE" ]; then
           echo "❌ Dataset file not found: $DATASET_FILE"
           echo "📁 Available files in datasets/:"
-          ls -la datasets/ || echo "No datasets folder found"
+          find datasets/ -name "*.csv" -o -name "*.json" | head -10
           exit 1
         fi
         
         echo "✅ Dataset file found: $DATASET_FILE"
         echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
         
-        echo "👀 Dataset preview:"
-        head -3 "$DATASET_FILE"
-        
-        # Validation du format CSV
-        if [[ "$DATASET_FILE" == *.csv ]]; then
-          # Vérifier que le fichier a les colonnes text,label
-          if ! head -1 "$DATASET_FILE" | grep -q "text.*label"; then
-            echo "⚠️ CSV header should contain 'text' and 'label' columns"
-            echo "📋 Current header: $(head -1 "$DATASET_FILE")"
+        # Utiliser notre script de validation
+        if [ -f "scripts/validate_dataset.py" ]; then
+          echo "🔍 Running comprehensive validation..."
+          python scripts/validate_dataset.py "$DATASET_FILE" || {
+            echo "❌ Dataset validation failed!"
+            echo "💡 Fix the issues above before proceeding with training"
+            exit 1
+          }
+          echo "✅ Dataset validation passed!"
+        else
+          echo "⚠️ Validation script not found, using basic checks..."
+          # Validation basique pour compatibilité
+          echo "👀 Dataset preview:"
+          head -3 "$DATASET_FILE"
+          
+          if [[ "$DATASET_FILE" == *.csv ]]; then
+            if ! head -1 "$DATASET_FILE" | grep -q "text.*label"; then
+              echo "⚠️ CSV header should contain 'text' and 'label' columns"
+              echo "📋 Current header: $(head -1 "$DATASET_FILE")"
+            fi
           fi
         fi
 
