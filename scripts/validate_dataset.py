@@ -24,8 +24,9 @@ import re
 import argparse
 import json
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 import logging
+import numpy as np
 
 # Configuration des logs
 logging.basicConfig(
@@ -36,6 +37,22 @@ logger = logging.getLogger("dataset-validator")
 
 # Regex pour validation des labels
 RE_LABEL = re.compile(r"^(negative|neutral|positive)$", re.IGNORECASE)
+
+def numpy_json_encoder(obj: Any) -> Any:
+    """Encoder personnalisé pour sérialiser les types numpy en JSON"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (pd.Series, pd.Index)):
+        return obj.tolist()
+    elif hasattr(obj, '__int__'):
+        return int(obj)
+    elif hasattr(obj, '__float__'):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 class ValidationError:
     """Représente une erreur de validation avec contexte détaillé"""
@@ -229,13 +246,13 @@ class DatasetValidator:
                                f"Texte entièrement en majuscules", line_num, "text")
     
     def _generate_report(self, df: pd.DataFrame = None) -> Dict:
-        """Génère un rapport de validation détaillé"""
+        """Génère un rapport de validation détaillé avec conversion des types numpy"""
         report = {
             "validation_success": len(self.errors) == 0,
             "errors": [error.to_dict() for error in self.errors],
             "warnings": [warning.to_dict() for warning in self.warnings],
-            "error_count": len(self.errors),
-            "warning_count": len(self.warnings),
+            "error_count": int(len(self.errors)),  # Conversion explicite
+            "warning_count": int(len(self.warnings)),  # Conversion explicite
             "statistics": {}
         }
         
@@ -243,14 +260,17 @@ class DatasetValidator:
             # Statistiques sur les labels valides seulement
             valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)] if "label" in df.columns else pd.DataFrame()
             
+            # Conversion explicite de tous les types numpy en types Python natifs
+            text_lengths = df["text"].str.len() if "text" in df.columns else pd.Series(dtype=float)
+            
             report["statistics"] = {
-                "total_samples": len(df),
-                "valid_samples": len(valid_labels),
-                "avg_text_length": df["text"].str.len().mean() if "text" in df.columns else 0,
-                "max_text_length": df["text"].str.len().max() if "text" in df.columns else 0,
-                "min_text_length": df["text"].str.len().min() if "text" in df.columns else 0,
-                "label_distribution": valid_labels["label"].value_counts().to_dict() if not valid_labels.empty else {},
-                "duplicates": df["text"].duplicated().sum() if "text" in df.columns else 0
+                "total_samples": int(len(df)),
+                "valid_samples": int(len(valid_labels)),
+                "avg_text_length": float(text_lengths.mean()) if not text_lengths.empty else 0.0,
+                "max_text_length": int(text_lengths.max()) if not text_lengths.empty else 0,
+                "min_text_length": int(text_lengths.min()) if not text_lengths.empty else 0,
+                "label_distribution": {str(k): int(v) for k, v in valid_labels["label"].value_counts().to_dict().items()} if not valid_labels.empty else {},
+                "duplicates": int(df["text"].duplicated().sum()) if "text" in df.columns else 0
             }
             
         return report
@@ -379,16 +399,23 @@ def main():
     if not args.quiet:
         validator.print_report(report)
     
-    # Sauvegarder le rapport JSON si demandé
+    # Sauvegarder le rapport JSON si demandé avec encoder personnalisé
     if args.output_json:
-        with open(args.output_json, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False)
-        print(f"\n📄 Rapport sauvegardé: {args.output_json}")
+        try:
+            with open(args.output_json, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False, default=numpy_json_encoder)
+            print(f"\n📄 Rapport sauvegardé: {args.output_json}")
+        except Exception as e:
+            logger.error(f"Erreur sauvegarde JSON: {e}")
+            # Ne pas faire échouer le script pour ça
     
     # Sauvegarder les erreurs pour PR si demandé
     if args.save_pr_errors:
-        validator.save_errors_for_pr()
-        print(f"\n📝 Erreurs PR sauvegardées: validation_errors.txt")
+        try:
+            validator.save_errors_for_pr()
+            print(f"\n📝 Erreurs PR sauvegardées: validation_errors.txt")
+        except Exception as e:
+            logger.error(f"Erreur sauvegarde erreurs PR: {e}")
     
     # Exit code pour intégration CI/CD
     sys.exit(0 if success else 1)
