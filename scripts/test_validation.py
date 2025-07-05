@@ -13,6 +13,7 @@ Tests:
 - Détection d'erreurs ligne par ligne
 - Formats CSV et JSON
 - Métriques et rapports
+- Sérialisation JSON (fix numpy types)
 """
 
 import pytest
@@ -22,11 +23,12 @@ from pathlib import Path
 import pandas as pd
 import sys
 import os
+import numpy as np
 
 # Ajouter le dossier scripts au path pour importer validate_dataset
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from validate_dataset import DatasetValidator, ValidationError
+from validate_dataset import DatasetValidator, ValidationError, numpy_json_encoder
 
 class TestDatasetValidator:
     
@@ -346,7 +348,7 @@ class TestDatasetValidator:
             success, report = self.validator.validate(csv_path)
             
             # Vérifier que le rapport est sérialisable en JSON
-            json_str = json.dumps(report)
+            json_str = json.dumps(report, default=numpy_json_encoder)
             parsed_report = json.loads(json_str)
             
             assert parsed_report["validation_success"] == success
@@ -356,6 +358,78 @@ class TestDatasetValidator:
             
         finally:
             csv_path.unlink()
+    
+    def test_numpy_json_serialization_fix(self):
+        """Test spécifique pour la sérialisation des types numpy (fix du bug)"""
+        content = """text,label
+"Apple stock rose",positive
+"Market declined",negative
+"Oil stable",neutral
+"Tesla news",positive
+"Fed decision",negative"""
+        
+        csv_path = self.create_temp_csv(content)
+        temp_json_file = Path("test_validation_report.json")
+        
+        try:
+            success, report = self.validator.validate(csv_path)
+            
+            # Vérifier que le rapport contient des statistiques
+            assert "statistics" in report
+            stats = report["statistics"]
+            
+            # Vérifier que toutes les valeurs numériques sont des types Python natifs
+            assert isinstance(stats["total_samples"], int)
+            assert isinstance(stats["valid_samples"], int)
+            assert isinstance(stats["avg_text_length"], float)
+            assert isinstance(stats["max_text_length"], int)
+            assert isinstance(stats["min_text_length"], int)
+            assert isinstance(stats["duplicates"], int)
+            
+            # Vérifier la distribution des labels
+            for label, count in stats["label_distribution"].items():
+                assert isinstance(label, str)
+                assert isinstance(count, int)
+            
+            # Test crucial : sérialisation JSON doit fonctionner
+            with open(temp_json_file, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False, default=numpy_json_encoder)
+            
+            # Vérifier qu'on peut relire le JSON
+            with open(temp_json_file, "r", encoding="utf-8") as f:
+                reloaded_report = json.load(f)
+            
+            assert reloaded_report["validation_success"] == report["validation_success"]
+            assert reloaded_report["error_count"] == report["error_count"]
+            assert reloaded_report["statistics"]["total_samples"] == report["statistics"]["total_samples"]
+            
+        finally:
+            csv_path.unlink()
+            if temp_json_file.exists():
+                temp_json_file.unlink()
+    
+    def test_numpy_encoder_function(self):
+        """Test de la fonction numpy_json_encoder directement"""
+        # Test avec différents types numpy
+        assert numpy_json_encoder(np.int64(42)) == 42
+        assert numpy_json_encoder(np.int32(10)) == 10
+        assert numpy_json_encoder(np.float64(3.14)) == 3.14
+        assert numpy_json_encoder(np.float32(2.5)) == 2.5
+        
+        # Test avec array numpy
+        arr = np.array([1, 2, 3])
+        assert numpy_json_encoder(arr) == [1, 2, 3]
+        
+        # Test avec pandas Series
+        series = pd.Series([1, 2, 3])
+        assert numpy_json_encoder(series) == [1, 2, 3]
+        
+        # Test avec type non supporté
+        try:
+            numpy_json_encoder(object())
+            assert False, "Should have raised TypeError"
+        except TypeError:
+            pass  # C'est attendu
 
 
 def run_manual_tests():
@@ -375,7 +449,9 @@ def run_manual_tests():
         ("test_file_not_found", "Fichier inexistant"),
         ("test_empty_dataset", "Dataset vide"),
         ("test_save_errors_for_pr", "Sauvegarde erreurs PR"),
-        ("test_json_output", "Sortie JSON")
+        ("test_json_output", "Sortie JSON"),
+        ("test_numpy_json_serialization_fix", "Fix sérialisation numpy"),
+        ("test_numpy_encoder_function", "Fonction encoder numpy")
     ]
     
     test_instance = TestDatasetValidator()
