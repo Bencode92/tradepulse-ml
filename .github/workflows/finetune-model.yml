@@ -1,0 +1,178 @@
+name: 🤖 TradePulse FinBERT Fine-tuning
+
+on:
+  # Déclenchement manuel avec paramètres
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Dataset filename (in datasets/ folder)'
+        required: true
+        default: 'news_20250705.csv'
+        type: string
+      
+      model_name:
+        description: 'Base model to fine-tune'
+        required: true
+        default: 'yiyanghkust/finbert-tone'
+        type: choice
+        options:
+          - 'yiyanghkust/finbert-tone'
+          - 'ProsusAI/finbert'
+          - 'nlptown/bert-base-multilingual-uncased-sentiment'
+      
+      epochs:
+        description: 'Number of training epochs'
+        required: true
+        default: '3'
+        type: string
+      
+      learning_rate:
+        description: 'Learning rate'
+        required: true
+        default: '2e-5'
+        type: string
+      
+      push_to_hub:
+        description: 'Push model to HuggingFace Hub'
+        required: true
+        default: false
+        type: boolean
+
+  # Déclenchement sur push dans datasets/
+  push:
+    paths:
+      - 'datasets/**'
+      - 'scripts/finetune.py'
+
+jobs:
+  finetune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 heures max
+
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+
+    - name: 🐍 Setup Python 3.9
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+        pip install transformers[torch] datasets accelerate evaluate
+        pip install scikit-learn pandas numpy
+        pip install huggingface_hub tensorboard
+        
+        # Si requirements.txt existe
+        if [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+
+    - name: 🔐 Setup HuggingFace Token
+      if: github.event.inputs.push_to_hub == 'true'
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        if [ ! -z "$HF_TOKEN" ]; then
+          pip install --upgrade huggingface_hub
+          python -c "from huggingface_hub import login; login('$HF_TOKEN')"
+          echo "✅ HuggingFace authentication successful"
+        else
+          echo "❌ HF_TOKEN required for push_to_hub=true"
+          exit 1
+        fi
+
+    - name: 📊 Validate Dataset
+      run: |
+        DATASET_FILE="datasets/${{ github.event.inputs.dataset || 'news_20250705.csv' }}"
+        echo "🔍 Checking dataset: $DATASET_FILE"
+        
+        if [ ! -f "$DATASET_FILE" ]; then
+          echo "❌ Dataset file not found: $DATASET_FILE"
+          echo "📁 Available files in datasets/:"
+          ls -la datasets/ || echo "No datasets folder found"
+          exit 1
+        fi
+        
+        echo "✅ Dataset file found: $DATASET_FILE"
+        echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
+
+    - name: 🤖 Run Fine-tuning
+      env:
+        DATASET: ${{ github.event.inputs.dataset || 'news_20250705.csv' }}
+        MODEL_NAME: ${{ github.event.inputs.model_name || 'yiyanghkust/finbert-tone' }}
+        EPOCHS: ${{ github.event.inputs.epochs || '3' }}
+        LEARNING_RATE: ${{ github.event.inputs.learning_rate || '2e-5' }}
+        PUSH_TO_HUB: ${{ github.event.inputs.push_to_hub || 'false' }}
+      run: |
+        echo "🚀 Starting FinBERT fine-tuning..."
+        echo "📋 Configuration:"
+        echo "  Dataset: $DATASET"
+        echo "  Model: $MODEL_NAME"
+        echo "  Epochs: $EPOCHS"
+        echo "  Learning Rate: $LEARNING_RATE"
+        echo "  Push to Hub: $PUSH_TO_HUB"
+        
+        # Créer le répertoire de sortie
+        OUTPUT_DIR="models/finbert-$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$OUTPUT_DIR"
+        
+        # Préparer les arguments pour le script
+        ARGS="--dataset datasets/$DATASET --output_dir $OUTPUT_DIR --model_name $MODEL_NAME --epochs $EPOCHS --lr $LEARNING_RATE"
+        
+        if [ "$PUSH_TO_HUB" = "true" ]; then
+          HUB_ID="Bencode92/tradepulse-finbert-$(date +%Y%m%d)"
+          ARGS="$ARGS --push --hub_id $HUB_ID"
+        fi
+        
+        # Lancer le script
+        python scripts/finetune.py $ARGS
+
+    - name: 📈 Training Summary
+      if: always()
+      run: |
+        echo "📊 Training Summary:"
+        
+        # Chercher les rapports de training
+        find models/ -name "training_report.json" -exec echo "📄 Report found: {}" \;
+        find models/ -name "training_report.json" -exec cat {} \;
+        
+        # Afficher la structure des modèles créés
+        echo ""
+        echo "📁 Generated models:"
+        find models/ -type d -name "finbert-*" | head -5
+
+    - name: 📤 Upload Model Artifacts
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: tradepulse-finbert-${{ github.run_id }}
+        path: |
+          models/finbert-*/
+          *.log
+        retention-days: 30
+
+    - name: 📤 Upload Logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: training-logs-${{ github.run_id }}
+        path: |
+          *.log
+          models/*/logs/
+        retention-days: 7
+
+    - name: 🎉 Success Notification
+      if: success()
+      run: |
+        echo "✅ Fine-tuning completed successfully!"
+        echo "🔍 Check the 'Actions' tab for artifacts"
+        if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
+          echo "🚀 Model pushed to HuggingFace Hub"
+        fi
