@@ -22,8 +22,9 @@ import sys
 import pandas as pd
 import re
 import argparse
+import json
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import logging
 
 # Configuration des logs
@@ -36,32 +37,70 @@ logger = logging.getLogger("dataset-validator")
 # Regex pour validation des labels
 RE_LABEL = re.compile(r"^(negative|neutral|positive)$", re.IGNORECASE)
 
+class ValidationError:
+    """Représente une erreur de validation avec contexte détaillé"""
+    def __init__(self, type_: str, message: str, line_number: Optional[int] = None, 
+                 field: Optional[str] = None, severity: str = "error"):
+        self.type = type_
+        self.message = message
+        self.line_number = line_number
+        self.field = field
+        self.severity = severity  # "error" or "warning"
+    
+    def to_dict(self) -> Dict:
+        return {
+            "type": self.type,
+            "message": self.message,
+            "line_number": self.line_number,
+            "field": self.field,
+            "severity": self.severity
+        }
+    
+    def __str__(self) -> str:
+        prefix = "❌" if self.severity == "error" else "⚠️"
+        line_info = f" (ligne {self.line_number})" if self.line_number else ""
+        return f"{prefix} {self.message}{line_info}"
+
 class DatasetValidator:
     def __init__(self, max_length: int = 512, min_samples: int = 10):
         self.max_length = max_length
         self.min_samples = min_samples
-        self.errors: List[str] = []
-        self.warnings: List[str] = []
+        self.errors: List[ValidationError] = []
+        self.warnings: List[ValidationError] = []
+        
+    def add_error(self, type_: str, message: str, line_number: Optional[int] = None, 
+                  field: Optional[str] = None):
+        """Ajoute une erreur critique"""
+        error = ValidationError(type_, message, line_number, field, "error")
+        self.errors.append(error)
+        logger.error(str(error))
+    
+    def add_warning(self, type_: str, message: str, line_number: Optional[int] = None,
+                    field: Optional[str] = None):
+        """Ajoute un avertissement"""
+        warning = ValidationError(type_, message, line_number, field, "warning")
+        self.warnings.append(warning)
+        logger.warning(str(warning))
         
     def validate(self, csv_path: Path) -> Tuple[bool, Dict]:
         """Valide un dataset CSV et retourne (succès, rapport)"""
         logger.info(f"🔍 Validation de: {csv_path}")
         
         if not csv_path.exists():
-            self.errors.append(f"❌ Fichier introuvable: {csv_path}")
+            self.add_error("file_not_found", f"Fichier introuvable: {csv_path}")
             return False, self._generate_report()
             
         try:
             df = pd.read_csv(csv_path)
         except Exception as e:
-            self.errors.append(f"❌ Erreur lecture CSV: {e}")
+            self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
             return False, self._generate_report()
             
-        # Série de validations
+        # Série de validations avec numéros de ligne
         self._check_structure(df)
-        self._check_content(df)
+        self._check_content_detailed(df)
         self._check_distribution(df)
-        self._check_quality(df)
+        self._check_quality_detailed(df)
         
         success = len(self.errors) == 0
         report = self._generate_report(df if success else None)
@@ -74,71 +113,71 @@ class DatasetValidator:
         actual_cols = set(df.columns)
         
         if actual_cols != expected_cols:
-            self.errors.append(
-                f"❌ Colonnes incorrectes. Attendu: {expected_cols}, "
-                f"Trouvé: {actual_cols}"
-            )
+            missing = expected_cols - actual_cols
+            extra = actual_cols - expected_cols
+            
+            if missing:
+                self.add_error("missing_columns", 
+                             f"Colonnes manquantes: {missing}")
+            if extra:
+                self.add_warning("extra_columns",
+                               f"Colonnes supplémentaires: {extra}")
             
         if df.empty:
-            self.errors.append("❌ Dataset vide")
+            self.add_error("empty_dataset", "Dataset vide")
             return
             
         if len(df) < self.min_samples:
-            self.warnings.append(
-                f"⚠️ Peu d'échantillons: {len(df)} < {self.min_samples}"
-            )
+            self.add_warning("insufficient_samples",
+                           f"Peu d'échantillons: {len(df)} < {self.min_samples}")
     
-    def _check_content(self, df: pd.DataFrame):
-        """Vérifie le contenu des données"""
+    def _check_content_detailed(self, df: pd.DataFrame):
+        """Vérifie le contenu avec détails ligne par ligne"""
         if "text" not in df.columns or "label" not in df.columns:
             return  # Déjà signalé dans _check_structure
             
-        # Vérification des valeurs manquantes
-        null_texts = df["text"].isnull().sum()
-        null_labels = df["label"].isnull().sum()
+        # Vérification des valeurs manquantes ligne par ligne
+        for idx, row in df.iterrows():
+            line_num = idx + 2  # +1 pour 0-index, +1 pour header
+            
+            if pd.isnull(row.get("text")):
+                self.add_error("missing_text", 
+                             f"Texte manquant", line_num, "text")
+            elif str(row["text"]).strip() == "":
+                self.add_error("empty_text",
+                             f"Texte vide", line_num, "text")
+                
+            if pd.isnull(row.get("label")):
+                self.add_error("missing_label",
+                             f"Label manquant", line_num, "label")
+            elif not RE_LABEL.match(str(row["label"])):
+                self.add_error("invalid_label",
+                             f"Label invalide: '{row['label']}' (doit être positive/negative/neutral)",
+                             line_num, "label")
         
-        if null_texts:
-            self.errors.append(f"❌ {null_texts} textes manquants")
-        if null_labels:
-            self.errors.append(f"❌ {null_labels} labels manquants")
-            
-        # Vérification des textes vides
-        empty_texts = (df["text"].str.strip() == "").sum()
-        if empty_texts:
-            self.errors.append(f"❌ {empty_texts} textes vides")
-            
-        # Vérification des labels valides
-        invalid_labels = ~df["label"].astype(str).str.match(RE_LABEL, na=False)
-        bad_labels = df[invalid_labels]
-        
-        if not bad_labels.empty:
-            unique_bad = bad_labels["label"].unique()
-            self.errors.append(
-                f"❌ {len(bad_labels)} labels invalides: {list(unique_bad)}"
-            )
-            
-        # Détection des doublons
-        duplicates = df["text"].duplicated().sum()
-        if duplicates:
-            self.warnings.append(f"⚠️ {duplicates} textes dupliqués détectés")
-            
-        # Textes trop longs
-        long_texts = df["text"].str.len() > self.max_length
-        if long_texts.any():
-            count = long_texts.sum()
-            max_len = df["text"].str.len().max()
-            self.warnings.append(
-                f"⚠️ {count} textes > {self.max_length} caractères "
-                f"(max: {max_len})"
-            )
+        # Détection des doublons avec numéros de ligne
+        if "text" in df.columns:
+            duplicated_mask = df["text"].duplicated(keep=False)
+            if duplicated_mask.any():
+                duplicate_groups = df[duplicated_mask].groupby("text")
+                for text, group in duplicate_groups:
+                    line_numbers = [idx + 2 for idx in group.index]
+                    self.add_warning("duplicate_text",
+                                   f"Texte dupliqué aux lignes {line_numbers}: '{text[:50]}...'")
     
     def _check_distribution(self, df: pd.DataFrame):
         """Vérifie la distribution des classes"""
         if "label" not in df.columns:
             return
             
-        label_counts = df["label"].value_counts()
-        total = len(df)
+        # Filtrer les labels valides pour les stats
+        valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)]
+        if valid_labels.empty:
+            self.add_error("no_valid_labels", "Aucun label valide trouvé")
+            return
+            
+        label_counts = valid_labels["label"].value_counts()
+        total = len(valid_labels)
         
         # Vérification de l'équilibre des classes
         for label in ["positive", "negative", "neutral"]:
@@ -146,92 +185,149 @@ class DatasetValidator:
             percentage = (count / total) * 100 if total > 0 else 0
             
             if count == 0:
-                self.warnings.append(f"⚠️ Aucun exemple '{label}'")
-            elif percentage < 15:  # Moins de 15% de la distribution
-                self.warnings.append(
-                    f"⚠️ Classe '{label}' sous-représentée: "
-                    f"{count} ({percentage:.1f}%)"
-                )
-            elif percentage > 70:  # Plus de 70% de la distribution
-                self.warnings.append(
-                    f"⚠️ Classe '{label}' sur-représentée: "
-                    f"{count} ({percentage:.1f}%)"
-                )
+                self.add_warning("missing_class",
+                               f"Aucun exemple '{label}'")
+            elif percentage < 10:  # Moins de 10% 
+                self.add_warning("underrepresented_class",
+                               f"Classe '{label}' sous-représentée: {count} ({percentage:.1f}%)")
+            elif percentage > 80:  # Plus de 80%
+                self.add_warning("overrepresented_class",
+                               f"Classe '{label}' sur-représentée: {count} ({percentage:.1f}%)")
     
-    def _check_quality(self, df: pd.DataFrame):
-        """Vérifie la qualité du contenu"""
+    def _check_quality_detailed(self, df: pd.DataFrame):
+        """Vérifie la qualité du contenu avec détails"""
         if "text" not in df.columns:
             return
             
-        # Textes très courts (potentiellement non informatifs)
-        short_texts = df["text"].str.len() < 20
-        if short_texts.any():
-            count = short_texts.sum()
-            self.warnings.append(f"⚠️ {count} textes très courts (< 20 caractères)")
+        for idx, row in df.iterrows():
+            if pd.isnull(row["text"]):
+                continue
+                
+            text = str(row["text"])
+            line_num = idx + 2
             
-        # Détection de caractères suspects
-        special_chars = df["text"].str.contains(r'[^\w\s\.\,\!\?\"\'\-\(\)\:\;]', regex=True, na=False)
-        if special_chars.any():
-            count = special_chars.sum()
-            self.warnings.append(f"⚠️ {count} textes avec caractères spéciaux")
+            # Textes très courts 
+            if len(text.strip()) < 10:
+                self.add_warning("very_short_text",
+                               f"Texte très court ({len(text)} caractères)",
+                               line_num, "text")
+            
+            # Textes très longs
+            if len(text) > self.max_length:
+                self.add_warning("text_too_long",
+                               f"Texte trop long ({len(text)} > {self.max_length} caractères)",
+                               line_num, "text")
+            
+            # Caractères suspects (non-texte)
+            if re.search(r'[^\w\s\.\,\!\?\"\'\-\(\)\:\;\%\$\+\=\&\@\#]', text):
+                self.add_warning("suspicious_characters",
+                               f"Caractères spéciaux détectés", line_num, "text")
+            
+            # Texte en majuscules (potentiel spam)
+            if len(text) > 20 and text.isupper():
+                self.add_warning("all_caps_text",
+                               f"Texte entièrement en majuscules", line_num, "text")
     
     def _generate_report(self, df: pd.DataFrame = None) -> Dict:
-        """Génère un rapport de validation"""
+        """Génère un rapport de validation détaillé"""
         report = {
             "validation_success": len(self.errors) == 0,
-            "errors": self.errors,
-            "warnings": self.warnings,
+            "errors": [error.to_dict() for error in self.errors],
+            "warnings": [warning.to_dict() for warning in self.warnings],
+            "error_count": len(self.errors),
+            "warning_count": len(self.warnings),
             "statistics": {}
         }
         
-        if df is not None:
+        if df is not None and not df.empty:
+            # Statistiques sur les labels valides seulement
+            valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)] if "label" in df.columns else pd.DataFrame()
+            
             report["statistics"] = {
                 "total_samples": len(df),
-                "avg_text_length": df["text"].str.len().mean(),
-                "max_text_length": df["text"].str.len().max(),
-                "min_text_length": df["text"].str.len().min(),
-                "label_distribution": df["label"].value_counts().to_dict(),
-                "duplicates": df["text"].duplicated().sum()
+                "valid_samples": len(valid_labels),
+                "avg_text_length": df["text"].str.len().mean() if "text" in df.columns else 0,
+                "max_text_length": df["text"].str.len().max() if "text" in df.columns else 0,
+                "min_text_length": df["text"].str.len().min() if "text" in df.columns else 0,
+                "label_distribution": valid_labels["label"].value_counts().to_dict() if not valid_labels.empty else {},
+                "duplicates": df["text"].duplicated().sum() if "text" in df.columns else 0
             }
             
         return report
     
     def print_report(self, report: Dict):
         """Affiche le rapport de validation"""
-        print("\n" + "="*50)
+        print("\n" + "="*60)
         print("🔍 RAPPORT DE VALIDATION DATASET")
-        print("="*50)
+        print("="*60)
         
-        # Erreurs
+        # Résumé
+        print(f"\n📊 RÉSUMÉ:")
+        print(f"  Erreurs critiques: {report['error_count']}")
+        print(f"  Avertissements: {report['warning_count']}")
+        
+        # Erreurs détaillées
         if report["errors"]:
-            print("\n❌ ERREURS CRITIQUES:")
+            print(f"\n❌ ERREURS CRITIQUES ({len(report['errors'])}):")
             for error in report["errors"]:
-                print(f"  {error}")
+                line_info = f" (ligne {error['line_number']})" if error['line_number'] else ""
+                print(f"  • {error['message']}{line_info}")
                 
-        # Warnings
+        # Avertissements détaillés
         if report["warnings"]:
-            print("\n⚠️ AVERTISSEMENTS:")
+            print(f"\n⚠️ AVERTISSEMENTS ({len(report['warnings'])}):")
             for warning in report["warnings"]:
-                print(f"  {warning}")
+                line_info = f" (ligne {warning['line_number']})" if warning['line_number'] else ""
+                print(f"  • {warning['message']}{line_info}")
                 
         # Statistiques
         if report["statistics"]:
             stats = report["statistics"]
-            print(f"\n📊 STATISTIQUES:")
+            print(f"\n📈 STATISTIQUES:")
             print(f"  Total échantillons: {stats['total_samples']}")
-            print(f"  Longueur moyenne: {stats['avg_text_length']:.1f} caractères")
-            print(f"  Longueur min/max: {stats['min_text_length']}/{stats['max_text_length']}")
-            print(f"  Doublons: {stats['duplicates']}")
-            
-            print(f"\n📈 DISTRIBUTION DES LABELS:")
-            for label, count in stats['label_distribution'].items():
-                percentage = (count / stats['total_samples']) * 100
-                print(f"  {label}: {count} ({percentage:.1f}%)")
+            print(f"  Échantillons valides: {stats['valid_samples']}")
+            if stats['valid_samples'] > 0:
+                print(f"  Longueur moyenne: {stats['avg_text_length']:.1f} caractères")
+                print(f"  Longueur min/max: {stats['min_text_length']}/{stats['max_text_length']}")
+                print(f"  Doublons: {stats['duplicates']}")
+                
+                print(f"\n📊 DISTRIBUTION DES LABELS:")
+                for label, count in stats['label_distribution'].items():
+                    percentage = (count / stats['valid_samples']) * 100
+                    print(f"  {label}: {count} ({percentage:.1f}%)")
         
         # Résultat final
         status = "✅ VALIDATION RÉUSSIE" if report["validation_success"] else "❌ VALIDATION ÉCHOUÉE"
         print(f"\n{status}")
-        print("="*50)
+        print("="*60)
+    
+    def save_errors_for_pr(self, output_file: Path = Path("validation_errors.txt")):
+        """Sauve les erreurs dans un format pour commentaire PR"""
+        if not self.errors and not self.warnings:
+            return
+            
+        lines = []
+        
+        if self.errors:
+            lines.append(f"❌ {len(self.errors)} ERREUR(S) CRITIQUE(S):")
+            lines.append("")
+            for error in self.errors:
+                line_info = f" (ligne {error.line_number})" if error.line_number else ""
+                lines.append(f"• {error.message}{line_info}")
+            lines.append("")
+        
+        if self.warnings:
+            lines.append(f"⚠️ {len(self.warnings)} AVERTISSEMENT(S):")
+            lines.append("")
+            for warning in self.warnings:
+                line_info = f" (ligne {warning.line_number})" if warning.line_number else ""
+                lines.append(f"• {warning.message}{line_info}")
+            lines.append("")
+        
+        lines.append("💡 Corrigez ces problèmes avant de merger la Pull Request.")
+        
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
 
 def main():
@@ -260,6 +356,16 @@ def main():
         action="store_true",
         help="Mode silencieux (seulement exit code)"
     )
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        help="Sauvegarder le rapport au format JSON"
+    )
+    parser.add_argument(
+        "--save-pr-errors",
+        action="store_true",
+        help="Sauvegarder les erreurs pour commentaire PR"
+    )
     
     args = parser.parse_args()
     
@@ -272,6 +378,17 @@ def main():
     
     if not args.quiet:
         validator.print_report(report)
+    
+    # Sauvegarder le rapport JSON si demandé
+    if args.output_json:
+        with open(args.output_json, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        print(f"\n📄 Rapport sauvegardé: {args.output_json}")
+    
+    # Sauvegarder les erreurs pour PR si demandé
+    if args.save_pr_errors:
+        validator.save_errors_for_pr()
+        print(f"\n📝 Erreurs PR sauvegardées: validation_errors.txt")
     
     # Exit code pour intégration CI/CD
     sys.exit(0 if success else 1)
