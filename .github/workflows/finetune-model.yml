@@ -208,8 +208,8 @@ jobs:
       with:
         name: tradepulse-finbert-${{ github.run_id }}
         path: |
-          models/finbert-*/
-          *.log
+          models/**
+          finetune.log
         retention-days: 30
 
     - name: 📤 Upload Logs
@@ -218,8 +218,8 @@ jobs:
       with:
         name: training-logs-${{ github.run_id }}
         path: |
-          *.log
-          models/*/logs/
+          finetune.log
+          models/**/logs/**
         retention-days: 7
 
     - name: 🎉 Success Notification
