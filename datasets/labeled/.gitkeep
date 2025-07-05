@@ -1,0 +1,14 @@
+# Données labellisées pour l'entraînement
+
+Format CSV requis :
+```csv
+text,label
+"Stock market rallies after positive earnings",positive
+"Company warns of potential losses",negative
+"Quarterly report released",neutral
+```
+
+Labels :
+- `positive` : Sentiment positif
+- `negative` : Sentiment négatif  
+- `neutral` : Sentiment neutre

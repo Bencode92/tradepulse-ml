@@ -1,0 +1,20 @@
+# Données brutes collectées depuis FMP API
+
+Format : `YYYY-MM-DD.json`
+
+Structure :
+```json
+{
+  "articles": [
+    {
+      "title": "...",
+      "content": "...",
+      "source": "...",
+      "date": "...",
+      "url": "..."
+    }
+  ],
+  "collection_date": "2025-03-11",
+  "total_count": 150
+}
+```

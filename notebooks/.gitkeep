@@ -1,0 +1,5 @@
+# Jupyter notebooks pour expérimentation
+
+- `data_exploration.ipynb` : Analyse exploratoire des données
+- `model_training.ipynb` : Entraînement interactif
+- `evaluation.ipynb` : Évaluation et benchmarks

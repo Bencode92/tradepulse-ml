@@ -1,0 +1,11 @@
+# Modèles prêts pour la production
+
+Nommage : `vX.Y.Z/` (semantic versioning)
+
+Chaque version contient :
+- `pytorch_model.bin` ou `model.safetensors`
+- `config.json` 
+- `tokenizer.json`
+- `model_card.md`
+- `performance_metrics.json`
+- `deployment_notes.md`

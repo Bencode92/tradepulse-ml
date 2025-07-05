@@ -1,0 +1,10 @@
+# Modèles expérimentaux
+
+Nommage : `finbert-sentiment-exp-YYYYMMDD-HHMMSS/`
+
+Chaque dossier contient :
+- `pytorch_model.bin` ou `model.safetensors`
+- `config.json`
+- `tokenizer.json`
+- `training_log.json`
+- `metrics.json`
