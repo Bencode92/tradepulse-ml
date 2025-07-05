@@ -1,0 +1,27 @@
+# Configuration des modèles de production
+
+versioning:
+  current_production: "v2.4.3"
+  current_staging: "v2.5.0-rc1"
+  
+deployment:
+  s3_bucket: "tp-models"
+  huggingface_org: "tradepulse"
+  model_registry: "s3"  # ou "huggingface"
+
+performance_thresholds:
+  min_accuracy: 0.85
+  min_f1_score: 0.82
+  min_confidence_avg: 0.75
+  max_inference_time_ms: 200
+
+monitoring:
+  enable_performance_tracking: true
+  enable_drift_detection: true
+  alert_on_performance_drop: true
+  performance_check_interval_hours: 6
+
+fallback:
+  enable_fallback_model: true
+  fallback_model: "yiyanghkust/finbert-tone"
+  fallback_threshold_accuracy: 0.70

@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ML Models (trop volumineux pour git)
+models/experiments/*/
+models/production/*/
+!models/experiments/.gitkeep
+!models/production/.gitkeep
+
+# Datasets (données sensibles)
+datasets/raw/*.json
+datasets/labeled/*.csv
+datasets/processed/*.csv
+!datasets/*/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Weights & Biases
+wandb/
+
+# MLflow
+mlruns/
+
+# Mac
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp
