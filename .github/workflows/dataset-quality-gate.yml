@@ -1,0 +1,204 @@
+name: 🔍 Dataset Quality Gate
+
+on:
+  # Validation lors des Pull Requests touchant des datasets
+  pull_request:
+    paths:
+      - 'datasets/**.csv'
+      - 'datasets/**.json'
+      - 'scripts/validate_dataset.py'
+  
+  # Validation manuelle
+  workflow_dispatch:
+    inputs:
+      dataset_path:
+        description: 'Dataset to validate (relative path from repo root)'
+        required: true
+        default: 'datasets/news_20250705.csv'
+        type: string
+
+jobs:
+  validate-datasets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        # Récupérer l'historique pour les diffs dans les PRs
+        fetch-depth: 0
+
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas>=2.0.0 numpy>=1.24.0
+        echo "✅ Dependencies installed"
+
+    - name: 🔍 Validate Datasets
+      run: |
+        echo "🧪 Starting dataset validation..."
+        
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          # Validation manuelle d'un dataset spécifique
+          DATASET="${{ github.event.inputs.dataset_path }}"
+          echo "🎯 Manual validation of: $DATASET"
+          
+          if [ ! -f "$DATASET" ]; then
+            echo "❌ Dataset file not found: $DATASET"
+            exit 1
+          fi
+          
+          echo "📊 Validating: $DATASET"
+          python scripts/validate_dataset.py "$DATASET"
+          
+        else
+          # Validation automatique des fichiers modifiés dans la PR
+          echo "🔄 PR validation mode"
+          
+          # Trouver les fichiers CSV/JSON modifiés
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E '^datasets/.*\.(csv|json)$' || true)
+          
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "ℹ️ No dataset files modified in this PR"
+            exit 0
+          fi
+          
+          echo "📁 Modified dataset files:"
+          echo "$CHANGED_FILES"
+          echo ""
+          
+          # Valider chaque fichier modifié
+          VALIDATION_FAILED=false
+          
+          for dataset in $CHANGED_FILES; do
+            echo "────────────────────────────────────────"
+            echo "🔍 Validating: $dataset"
+            echo "────────────────────────────────────────"
+            
+            if [ ! -f "$dataset" ]; then
+              echo "❌ File was deleted or moved: $dataset"
+              continue
+            fi
+            
+            if python scripts/validate_dataset.py "$dataset"; then
+              echo "✅ $dataset passed validation"
+            else
+              echo "❌ $dataset failed validation"
+              VALIDATION_FAILED=true
+            fi
+            echo ""
+          done
+          
+          if [ "$VALIDATION_FAILED" = "true" ]; then
+            echo "❌ One or more datasets failed validation"
+            echo "💡 Please fix the issues above before merging"
+            exit 1
+          fi
+          
+          echo "✅ All modified datasets passed validation!"
+        fi
+
+    - name: 📊 Generate Validation Report
+      if: always()
+      run: |
+        echo "📋 Dataset Validation Summary"
+        echo "============================="
+        echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+        echo "🌿 Branch: ${{ github.head_ref || github.ref_name }}"
+        echo "👤 Author: ${{ github.actor }}"
+        
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "🔗 PR: #${{ github.event.number }}"
+          echo "📝 Title: ${{ github.event.pull_request.title }}"
+        fi
+        
+        echo ""
+        echo "📁 Repository datasets:"
+        find datasets/ -name "*.csv" -o -name "*.json" | head -10 | while read file; do
+          size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "?")
+          echo "  📄 $file ($size)"
+        done
+        
+        total_datasets=$(find datasets/ -name "*.csv" -o -name "*.json" | wc -l)
+        echo "📊 Total datasets: $total_datasets"
+
+  # Job de commentaire automatique sur la PR (optionnel)
+  comment-pr:
+    runs-on: ubuntu-latest
+    needs: validate-datasets
+    if: github.event_name == 'pull_request' && always()
+    
+    steps:
+    - name: 📝 Comment PR Results
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const jobStatus = '${{ needs.validate-datasets.result }}';
+          const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
+          
+          let emoji, status, message;
+          
+          if (jobStatus === 'success') {
+            emoji = '✅';
+            status = 'PASSED';
+            message = 'All dataset validations passed! Your datasets are ready for training.';
+          } else if (jobStatus === 'failure') {
+            emoji = '❌';
+            status = 'FAILED';
+            message = 'Dataset validation failed. Please check the validation report and fix the issues.';
+          } else {
+            emoji = '⚠️';
+            status = 'CANCELLED/SKIPPED';
+            message = 'Dataset validation was cancelled or skipped.';
+          }
+          
+          const comment = `
+          ## ${emoji} Dataset Quality Gate - ${status}
+          
+          ${message}
+          
+          **Details:**
+          - 🔗 [View full validation report](${runUrl})
+          - 📊 Validation script: \`scripts/validate_dataset.py\`
+          - 🎯 Trigger: Dataset files modified in PR
+          
+          ---
+          
+          ### Next steps:
+          ${jobStatus === 'success' 
+            ? '🚀 Ready to merge! The fine-tuning job will start automatically after merge.'
+            : '🔧 Fix validation issues and push new changes to re-trigger validation.'
+          }
+          `;
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  # Préparer les artifacts pour debug si nécessaire
+  upload-artifacts:
+    runs-on: ubuntu-latest
+    needs: validate-datasets
+    if: always() && github.event_name == 'pull_request'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 📤 Upload Validation Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dataset-validation-${{ github.event.number }}
+        path: |
+          datasets/
+          scripts/validate_dataset.py
+        retention-days: 7
