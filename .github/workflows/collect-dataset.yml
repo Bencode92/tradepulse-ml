@@ -235,16 +235,50 @@ jobs:
         TODAY=$(TZ='Europe/Paris' date '+%Y-%m-%d')
         FULL_TIMESTAMP=$(TZ='Europe/Paris' date '+%Y-%m-%d %H:%M:%S %Z')
         
+        # Diagnostic AVANT git add
+        echo "🔍 Diagnostic Git AVANT git add:"
+        echo "  Working directory status:"
+        git status --porcelain | head -10
+        echo "  Dataset file exists: $([ -f "$DATASET_PATH" ] && echo "✅ YES" || echo "❌ NO")"
+        if [ -f "$DATASET_PATH" ]; then
+          echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
+        fi
+        
         # Ajouter les fichiers datasets
+        echo "🔧 Executing: git add datasets/"
         git add datasets/
+        
+        # Diagnostic APRÈS git add
+        echo ""
+        echo "🔍 Diagnostic Git APRÈS git add:"
+        echo "  Staged files:"
+        git diff --staged --name-only | head -10
+        echo "  Staged status:"
+        git status --porcelain --staged | head -10
         
         # Vérifier s'il y a des changements - logique intelligente
         HAS_CHANGES=false
         if ! git diff --staged --quiet; then
           HAS_CHANGES=true
-          echo "✅ Changements détectés dans les datasets"
+          echo "✅ Changements détectés dans l'index Git"
+          echo "📋 Fichiers à committer:"
+          git diff --staged --name-only
         else
-          echo "ℹ️ Aucun changement détecté dans les datasets"
+          echo "⚠️ AUCUN changement détecté dans l'index Git"
+          echo "🔍 Cause possible:"
+          echo "  1. Fichier déjà commité précédemment"
+          echo "  2. Fichier bloqué par .gitignore"
+          echo "  3. Problème de permissions"
+          
+          # Test de diagnostic .gitignore
+          echo ""
+          echo "🕵️ Test .gitignore pour $DATASET_PATH:"
+          if git check-ignore "$DATASET_PATH"; then
+            echo "❌ PROBLÈME: Le fichier est ignoré par .gitignore"
+            echo "💡 Solution: Vérifiez les règles dans .gitignore"
+          else
+            echo "✅ Le fichier N'EST PAS ignoré par .gitignore"
+          fi
         fi
         
         # Décider du commit selon la logique
@@ -252,7 +286,7 @@ jobs:
           # Il y a des changements → commit normal
           COMMIT_ACTION="normal"
           
-          # Utiliser here-doc pour le message multiligne (fix YAML)
+          # Utiliser here-doc pour le message multiligne
           COMMIT_MSG=$(cat <<EOF
         📰 Add daily financial news dataset ($TODAY)
 
@@ -270,7 +304,7 @@ jobs:
           # Pas de changements mais commit forcé
           COMMIT_ACTION="forced"
           
-          # Utiliser here-doc pour le message multiligne (fix YAML)
+          # Utiliser here-doc pour le message multiligne
           COMMIT_MSG=$(cat <<EOF
         🔄 Forced dataset update ($TODAY)
 
@@ -288,11 +322,13 @@ jobs:
           # Pas de changements et pas de commit forcé → skip proprement
           echo "🔄 Pas de changements et force_commit=false → skip commit"
           echo "💡 Le dataset existe déjà et est identique"
+          echo "🛠️ Pour forcer un commit: relancez avec force_commit=true"
           echo "✅ Workflow terminé avec succès (pas de commit nécessaire)"
           exit 0
         fi
         
         # Exécuter le commit selon l'action
+        echo ""
         echo "🚀 Action: commit $COMMIT_ACTION"
         
         if [ "$COMMIT_ACTION" = "forced" ]; then
@@ -358,7 +394,8 @@ jobs:
             **🔧 Actions suggérées:**
             1. Vérifier les logs du workflow
             2. Tester la collecte localement
-            3. Vérifier les dépendances (feedparser, requests)`;
+            3. Vérifier les dépendances (feedparser, requests)
+            4. Vérifier les règles .gitignore`;
           }
           
           const commentBody = `## ${emoji} Daily News Collection - ${statusText}
