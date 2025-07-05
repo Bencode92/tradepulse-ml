@@ -1,0 +1,16 @@
+# TradePulse FinBERT Fine-tuning Dependencies
+torch>=2.0.0
+transformers>=4.30.0
+datasets>=2.12.0
+accelerate>=0.20.0
+evaluate>=0.4.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+numpy>=1.24.0
+huggingface_hub>=0.16.0
+tensorboard>=2.13.0
+
+# Optional dependencies
+# wandb>=0.15.0  # For experiment tracking
+# matplotlib>=3.7.0  # For plotting
+# seaborn>=0.12.0  # For advanced plotting
