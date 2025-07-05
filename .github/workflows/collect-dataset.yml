@@ -19,7 +19,7 @@ on:
           - 'newsapi'
       
       count:
-        description: 'Nombre d\'échantillons à collecter'
+        description: "Nombre d'échantillons à collecter"
         required: true
         default: '25'
         type: string
