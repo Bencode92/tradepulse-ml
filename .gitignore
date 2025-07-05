@@ -55,14 +55,19 @@ wandb/
 tensorboard/
 mlruns/
 
-# Data files
-*.csv
-*.json
+# Data files - Structure intelligente
+# Ignorer les gros fichiers de données par défaut
 *.parquet
 *.feather
-datasets/*.csv
-datasets/*.json
-!datasets/news_20250705.csv  # Keep example dataset
+datasets/raw/*.csv          # Données brutes (volumineuses)
+datasets/raw/*.json
+datasets/raw/*.parquet
+
+# Autoriser les datasets d'entraînement (légers et versionnés)
+!datasets/*.csv             # ✅ Permet les datasets principaux
+!datasets/*.json            # ✅ Permet les datasets JSON
+!datasets/labeled/*.csv     # ✅ Permet les datasets étiquetés
+!datasets/labeled/*.json
 
 # Temporary files
 .cache/
