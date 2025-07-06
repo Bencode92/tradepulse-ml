@@ -25,7 +25,8 @@ def latest_dataset(dir_path: str = "datasets") -> Optional[Path]:
             print(f"⚠️ Répertoire {dir_path} introuvable")
             return None
 
-        # Chercher tous les fichiers news_*.csv et les trier par nom (date décroissante)
+        # Chercher tous les fichiers news_*.csv et les trier par nom
+        # (date décroissante)
         csvs = sorted(datasets_dir.glob("news_*.csv"), reverse=True)
 
         if not csvs:
