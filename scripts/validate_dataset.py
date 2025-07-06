@@ -175,7 +175,9 @@ class DatasetValidator:
             extra = actual_cols - expected_cols
 
             if missing:
-                self.add_error("missing_columns", f"Colonnes manquantes: {missing}")
+                self.add_error(
+                    "missing_columns", f"Colonnes manquantes: {missing}"
+                )
             if extra:
                 self.add_warning(
                     "extra_columns", f"Colonnes supplémentaires: {extra}"
@@ -222,7 +224,9 @@ class DatasetValidator:
             # Vérification des labels
             label_value = row.get("label")
             if pd.isnull(label_value) or label_value == "":
-                self.add_error("missing_label", f"Label manquant", line_num, "label")
+                self.add_error(
+                    "missing_label", f"Label manquant", line_num, "label"
+                )
             else:
                 label_str = str(label_value).strip()
                 if not RE_LABEL.match(label_str):
@@ -253,7 +257,9 @@ class DatasetValidator:
             return
 
         # Filtrer les labels valides pour les stats
-        valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)]
+        valid_labels = df[
+            df["label"].astype(str).str.match(RE_LABEL, na=False)
+        ]
         if valid_labels.empty:
             self.add_error("no_valid_labels", "Aucun label valide trouvé")
             return
@@ -481,7 +487,9 @@ class DatasetValidator:
                 lines.append(f"• {warning.message}{line_info}")
             lines.append("")
 
-        lines.append("💡 Corrigez ces problèmes avant de merger la Pull Request.")
+        lines.append(
+            "💡 Corrigez ces problèmes avant de merger la Pull Request."
+        )
 
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
