@@ -314,7 +314,7 @@ class DatasetValidator:
 
             # Caractères suspects (non-texte)
             if re.search(
-                r"[^\w\s\.\,\!\?\"\'\-\(\)\:\;\%\$\+\=\&\@\#]", text
+                r"[^\w\s\.\,\!\?\"\'\'\-\(\)\:\;\%\$\+\=\&\@\#]", text
             ):
                 self.add_warning(
                     "suspicious_characters",
