@@ -225,7 +225,9 @@ class Finetuner:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="TradePulse FinBERT fine‑tuning utility")
+    p = argparse.ArgumentParser(
+        description="TradePulse FinBERT fine‑tuning utility"
+    )
     p.add_argument(
         "--dataset",
         type=Path,
@@ -273,7 +275,8 @@ def main():
         else:
             logger.error("❌ Aucun dataset trouvé")
             logger.info(
-                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv "
+                "dans datasets/"
             )
             return
     elif args.dataset is None:
