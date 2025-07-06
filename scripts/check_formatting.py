@@ -83,7 +83,9 @@ def check_ruff_linting():
     """Vérifie le linting Ruff"""
     print("\n🔍 Vérification linting Ruff...")
 
-    code, stdout, stderr = run_command(["python", "-m", "ruff", "check", "scripts/"])
+    code, stdout, stderr = run_command([
+        "python", "-m", "ruff", "check", "scripts/"
+    ])
 
     if code == 0:
         print("✅ Ruff check: OK")

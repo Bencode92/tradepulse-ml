@@ -13,9 +13,9 @@ TradePulse – FinBERT Fine‑Tuning Utility (clean version)
 
 Exemple :
 ----------
-$ python finetune.py \
-    --dataset datasets/news_20250705.csv \
-    --output_dir models/finbert-v1 \
+$ python finetune.py \\
+    --dataset datasets/news_20250705.csv \\
+    --output_dir models/finbert-v1 \\
     --model_name yiyanghkust/finbert-tone
 
 Ou avec auto-sélection :
@@ -67,11 +67,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tradepulse-finetune")
 
+
 # ---------------------------------------------------------------------------
 # Fine‑tuner class
 # ---------------------------------------------------------------------------
-
-
 class Finetuner:
     LABEL_MAP: Dict[str, int] = {"negative": 0, "neutral": 1, "positive": 2}
     ID2LABEL: Dict[int, str] = {v: k for k, v in LABEL_MAP.items()}
@@ -223,8 +222,6 @@ class Finetuner:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="TradePulse FinBERT fine‑tuning utility"
@@ -262,8 +259,6 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Entrée principale
 # ---------------------------------------------------------------------------
-
-
 def main():
     args = build_parser().parse_args()
     set_seed(args.seed)
