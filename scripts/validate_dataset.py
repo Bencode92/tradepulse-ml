@@ -8,6 +8,7 @@ Valide la qualité et la cohérence des datasets d'entraînement FinBERT.
 
 Usage:
     python scripts/validate_dataset.py datasets/news_20250705.csv
+    python scripts/validate_dataset.py  # Auto-sélection du dernier dataset
 
 Vérifications:
 - Structure des colonnes (text, label)
@@ -27,6 +28,13 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Any
 import logging
 import numpy as np
+
+# Auto-sélection helper
+try:
+    from utils import latest_dataset
+    AUTOSEL = True
+except ImportError:
+    AUTOSEL = False
 
 # Configuration des logs
 logging.basicConfig(
@@ -351,13 +359,25 @@ class DatasetValidator:
 
 
 def main():
+    # Auto-sélection si aucun arg fourni
+    if len(sys.argv) == 1 and AUTOSEL:
+        ds = latest_dataset()
+        if ds:
+            print(f"🕵️  Auto-sélection : {ds}")
+            sys.argv.append(str(ds))
+        else:
+            print("❌ Aucun news_*.csv trouvé")
+            print("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            return
+
     parser = argparse.ArgumentParser(
         description="Validation de datasets TradePulse FinBERT"
     )
     parser.add_argument(
         "dataset_path", 
         type=Path,
-        help="Chemin vers le fichier CSV à valider"
+        nargs='?',  # Rendre optionnel
+        help="Chemin vers le fichier CSV à valider (auto-détection si omis)"
     )
     parser.add_argument(
         "--max-length", 
@@ -388,6 +408,20 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Si pas de dataset_path après parsing, essayer auto-sélection
+    if args.dataset_path is None and AUTOSEL:
+        args.dataset_path = latest_dataset()
+        if args.dataset_path:
+            print(f"🕵️  Auto-sélection : {args.dataset_path}")
+        else:
+            print("❌ Aucun dataset trouvé")
+            print("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            sys.exit(1)
+    elif args.dataset_path is None:
+        print("❌ Aucun dataset spécifié et auto-sélection non disponible")
+        print("💡 Utilisez: python scripts/validate_dataset.py datasets/votre_fichier.csv")
+        sys.exit(1)
     
     validator = DatasetValidator(
         max_length=args.max_length,

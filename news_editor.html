@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TradePulse – Éditeur & GitHub Sync</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-sUGkJws2DGpIJ9nnwBtN3i/CfgkVUO+Q1ovYvvG3nX2z1GDQeicnG1c8HjvU6Nu4El3PReQ7ZHsW42N9lDmfZQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  </head>
+  <body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
+    <div class="max-w-7xl mx-auto space-y-6">
+      <!-- Header avec style moderne -->
+      <div class="text-center py-8">
+        <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+          📰 TradePulse
+        </h1>
+        <p class="text-xl text-gray-300 mt-2">News Dataset Editor & GitHub Sync</p>
+      </div>
+
+      <!-- GitHub config avec design amélioré -->
+      <details class="bg-white/10 backdrop-blur-lg rounded-xl shadow-2xl border border-white/20 p-6">
+        <summary class="cursor-pointer text-lg font-medium select-none text-white flex items-center gap-2">
+          <span class="text-2xl">🔧</span> Connexion GitHub
+          <span class="ml-auto text-sm text-gray-300">(optionnel)</span>
+        </summary>
+        <div class="grid md:grid-cols-4 gap-4 mt-6">
+          <div class="col-span-2">
+            <label class="block text-sm font-medium mb-2 text-gray-200">Repository (owner/nom)</label>
+            <input id="ghRepo" type="text" placeholder="Bencode92/tradepulse-ml" 
+                   class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-2 text-gray-200">Branch</label>
+            <input id="ghBranch" type="text" value="main" 
+                   class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-2 text-gray-200">Token (scope repo)</label>
+            <input id="ghToken" type="password" placeholder="ghp_..."
+                   class="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 backdrop-blur-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+        </div>
+        <div class="flex flex-wrap gap-4 mt-6">
+          <button id="loadGithubBtn" class="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105">
+            📥 Charger dernier CSV GitHub
+          </button>
+          <button id="pushGithubBtn" class="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105" disabled>
+            📤 Commit vers GitHub
+          </button>
+          <button id="triggerWorkflowBtn" class="px-6 py-3 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105" disabled>
+            🚀 Déclencher Fine-tuning
+          </button>
+          <span id="ghStatus" class="text-sm text-gray-300 flex items-center"></span>
+        </div>
+      </details>
+
+      <!-- Actions bar avec design moderne -->
+      <div class="flex flex-wrap gap-4 items-center bg-white/10 backdrop-blur-lg p-6 rounded-xl shadow-2xl border border-white/20">
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input id="fileInput" type="file" accept=".csv" class="hidden" />
+          <span class="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105">
+            📁 Importer CSV local
+          </span>
+        </label>
+        <button id="addRowBtn" class="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105" disabled>
+          ➕ Ajouter ligne
+        </button>
+        <button id="validateBtn" class="px-6 py-3 bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105" disabled>
+          ✅ Valider données
+        </button>
+        <button id="downloadBtn" class="px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white rounded-lg shadow-lg transition-all duration-200 transform hover:scale-105" disabled>
+          💾 Télécharger CSV
+        </button>
+        <span id="status" class="text-sm text-gray-300 ml-auto flex items-center"></span>
+      </div>
+
+      <!-- Statistiques du dataset -->
+      <div id="statsPanel" class="hidden grid md:grid-cols-4 gap-4">
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-blue-400" id="totalRows">0</div>
+          <div class="text-sm text-gray-300">Total lignes</div>
+        </div>
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-green-400" id="positiveCount">0</div>
+          <div class="text-sm text-gray-300">Positifs</div>
+        </div>
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-red-400" id="negativeCount">0</div>
+          <div class="text-sm text-gray-300">Négatifs</div>
+        </div>
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-gray-400" id="neutralCount">0</div>
+          <div class="text-sm text-gray-300">Neutres</div>
+        </div>
+      </div>
+
+      <!-- Table container avec design amélioré -->
+      <div id="tableWrapper" class="overflow-x-auto rounded-xl shadow-2xl bg-white/10 backdrop-blur-lg border border-white/20"></div>
+
+      <!-- Messages de validation -->
+      <div id="validationResults" class="hidden bg-white/10 backdrop-blur-lg rounded-xl p-6 border border-white/20">
+        <h3 class="text-lg font-medium text-white mb-4">🔍 Résultats de validation</h3>
+        <div id="validationContent" class="text-gray-300"></div>
+      </div>
+    </div>
+
+    <script>
+      const qs = id => document.getElementById(id);
+      const fileInput = qs('fileInput');
+      const addRowBtn = qs('addRowBtn');
+      const validateBtn = qs('validateBtn');
+      const downloadBtn = qs('downloadBtn');
+      const tableWrapper = qs('tableWrapper');
+      const statusSpan = qs('status');
+      const statsPanel = qs('statsPanel');
+
+      const ghRepoInp = qs('ghRepo');
+      const ghBranchInp = qs('ghBranch');
+      const ghTokenInp = qs('ghToken');
+      const loadGithubBtn = qs('loadGithubBtn');
+      const pushGithubBtn = qs('pushGithubBtn');
+      const triggerWorkflowBtn = qs('triggerWorkflowBtn');
+      const ghStatus = qs('ghStatus');
+
+      const validationResults = qs('validationResults');
+      const validationContent = qs('validationContent');
+
+      let headers = [];
+      let rows = [];
+      let currentFilename = '';
+      let currentSha = null;
+
+      // ----------------- Validation locale -----------------
+      function validateDataset() {
+        const issues = [];
+        const stats = { positive: 0, negative: 0, neutral: 0, invalid: 0 };
+        
+        if (!headers.includes('text') || !headers.includes('label')) {
+          issues.push('❌ Colonnes "text" et "label" requises');
+        }
+        
+        rows.forEach((row, idx) => {
+          if (!row.text || row.text.trim().length < 10) {
+            issues.push(`⚠️ Ligne ${idx + 1}: texte trop court (< 10 caractères)`);
+          }
+          
+          if (row.text && row.text.length > 512) {
+            issues.push(`⚠️ Ligne ${idx + 1}: texte trop long (> 512 caractères)`);
+          }
+          
+          const label = row.label?.toLowerCase();
+          if (['positive', 'negative', 'neutral'].includes(label)) {
+            stats[label]++;
+          } else {
+            stats.invalid++;
+            issues.push(`❌ Ligne ${idx + 1}: label invalide "${row.label}"`);
+          }
+        });
+        
+        // Vérifier équilibrage
+        const total = rows.length;
+        const maxPercent = Math.max(stats.positive, stats.negative, stats.neutral) / total;
+        if (maxPercent > 0.7) {
+          issues.push(`⚠️ Dataset déséquilibré (${Math.round(maxPercent * 100)}% d'une classe)`);
+        }
+        
+        // Afficher résultats
+        let html = `<div class="grid md:grid-cols-2 gap-4">`;
+        html += `<div>`;
+        html += `<h4 class="font-medium text-white mb-2">📊 Statistiques</h4>`;
+        html += `<ul class="space-y-1 text-sm">`;
+        html += `<li>Total: ${total} échantillons</li>`;
+        html += `<li>Positifs: ${stats.positive} (${Math.round(stats.positive/total*100)}%)</li>`;
+        html += `<li>Négatifs: ${stats.negative} (${Math.round(stats.negative/total*100)}%)</li>`;
+        html += `<li>Neutres: ${stats.neutral} (${Math.round(stats.neutral/total*100)}%)</li>`;
+        if (stats.invalid > 0) html += `<li class="text-red-400">Invalides: ${stats.invalid}</li>`;
+        html += `</ul></div>`;
+        
+        html += `<div>`;
+        html += `<h4 class="font-medium text-white mb-2">${issues.length ? '⚠️' : '✅'} Validation</h4>`;
+        if (issues.length) {
+          html += `<ul class="space-y-1 text-sm">${issues.map(i => `<li>${i}</li>`).join('')}</ul>`;
+        } else {
+          html += `<p class="text-green-400">✅ Dataset valide !</p>`;
+        }
+        html += `</div></div>`;
+        
+        validationContent.innerHTML = html;
+        validationResults.classList.remove('hidden');
+        
+        return issues.length === 0;
+      }
+
+      // ----------------- Statistiques -----------------
+      function updateStats() {
+        if (!rows.length) return;
+        
+        const stats = { positive: 0, negative: 0, neutral: 0 };
+        rows.forEach(row => {
+          const label = row.label?.toLowerCase();
+          if (stats.hasOwnProperty(label)) stats[label]++;
+        });
+        
+        qs('totalRows').textContent = rows.length;
+        qs('positiveCount').textContent = stats.positive;
+        qs('negativeCount').textContent = stats.negative;
+        qs('neutralCount').textContent = stats.neutral;
+        
+        statsPanel.classList.remove('hidden');
+      }
+
+      // ----------------- Rendu du tableau amélioré -----------------
+      function renderTable() {
+        if (!headers.length) return;
+        
+        let html = '<table class="min-w-full divide-y divide-white/20 text-sm">';
+        html += '<thead class="bg-white/10"><tr>' + 
+                headers.map(h => `<th class="px-4 py-3 text-left font-medium uppercase text-gray-200">${h}</th>`).join('') + 
+                '<th class="px-4 py-3 text-left font-medium uppercase text-gray-200">Actions</th></tr></thead>';
+        html += '<tbody class="divide-y divide-white/10">';
+        
+        rows.forEach((row, rIdx) => {
+          const isValidLabel = ['positive', 'negative', 'neutral'].includes(row.label?.toLowerCase());
+          const labelClass = isValidLabel ? 'text-green-300' : 'text-red-300';
+          
+          html += `<tr class="hover:bg-white/5 transition-colors">`;
+          headers.forEach(h => {
+            const cellClass = h === 'label' ? labelClass : 'text-gray-200';
+            html += `<td contenteditable="true" data-row="${rIdx}" data-col="${h}" 
+                         class="px-4 py-3 whitespace-pre-wrap focus:outline-none focus:bg-white/10 ${cellClass} rounded transition-colors">
+                         ${row[h] ?? ''}
+                     </td>`;
+          });
+          html += `<td class="px-4 py-3">
+                     <button onclick="deleteRow(${rIdx})" class="text-red-400 hover:text-red-300 transition-colors">🗑️</button>
+                   </td>`;
+          html += '</tr>';
+        });
+        
+        html += '</tbody></table>';
+        tableWrapper.innerHTML = html;
+        
+        // Event listeners sur cellules
+        tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
+          cell.addEventListener('input', e => {
+            const r = +cell.dataset.row, c = cell.dataset.col;
+            rows[r][c] = cell.innerText.trim();
+            updateStats();
+            statusSpan.textContent = `Ligne ${r + 1} modifiée...`;
+          });
+        });
+        
+        updateStats();
+      }
+
+      function deleteRow(index) {
+        rows.splice(index, 1);
+        renderTable();
+        statusSpan.textContent = `Ligne supprimée`;
+      }
+
+      function enableLocalBtns() { 
+        addRowBtn.disabled = false; 
+        validateBtn.disabled = false;
+        downloadBtn.disabled = false; 
+        pushGithubBtn.disabled = false;
+        triggerWorkflowBtn.disabled = false;
+      }
+
+      // ----------------- Événements -----------------
+      fileInput.addEventListener('change', e => {
+        if (e.target.files.length) parseCsvFile(e.target.files[0]);
+      });
+
+      function parseCsvFile(file) {
+        Papa.parse(file, {
+          header: true,
+          skipEmptyLines: true,
+          complete: res => {
+            headers = res.meta.fields; 
+            rows = res.data;
+            currentFilename = file.name; 
+            currentSha = null;
+            renderTable(); 
+            enableLocalBtns();
+            statusSpan.textContent = `${rows.length} lignes depuis ${file.name}`;
+            validationResults.classList.add('hidden');
+          },
+          error: err => {
+            statusSpan.textContent = 'Erreur CSV: ' + err;
+            console.error(err);
+          }
+        });
+      }
+
+      addRowBtn.addEventListener('click', () => {
+        const obj = {}; 
+        headers.forEach(h => obj[h] = h === 'label' ? 'neutral' : ''); 
+        rows.push(obj);
+        renderTable(); 
+        statusSpan.textContent = `Ligne ajoutée (#${rows.length})`;
+      });
+
+      validateBtn.addEventListener('click', () => {
+        const isValid = validateDataset();
+        statusSpan.textContent = isValid ? '✅ Dataset validé' : '⚠️ Erreurs détectées';
+      });
+
+      downloadBtn.addEventListener('click', () => {
+        const csv = Papa.unparse(rows, { columns: headers });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const name = currentFilename || `news_${new Date().toISOString().slice(0,10).replace(/-/g,'')}.csv`;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); 
+        a.href = url; 
+        a.download = name; 
+        document.body.appendChild(a); 
+        a.click(); 
+        document.body.removeChild(a); 
+        URL.revokeObjectURL(url);
+        statusSpan.textContent = 'CSV téléchargé ✔️';
+      });
+
+      // ----------------- GitHub helpers -----------------
+      async function githubRequest(path, method='GET', body=null) {
+        const token = ghTokenInp.value.trim();
+        const repo = ghRepoInp.value.trim();
+        if (!token || !repo) throw new Error('Token ou repo manquant');
+        
+        const res = await fetch(`https://api.github.com/repos/${repo}/${path}`, {
+          method,
+          headers: {
+            'Authorization': `token ${token}`,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+          },
+          body: body ? JSON.stringify(body) : null
+        });
+        
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          throw new Error(`GitHub ${method} ${path} → ${res.status}: ${errorData.message || 'Erreur inconnue'}`);
+        }
+        return res.json();
+      }
+
+      // Load latest CSV from GitHub
+      loadGithubBtn.addEventListener('click', async () => {
+        try {
+          ghStatus.textContent = '🔍 Recherche du dernier fichier...';
+          const branch = ghBranchInp.value.trim() || 'main';
+          const files = await githubRequest(`contents/datasets?ref=${branch}`);
+          
+          const csvFiles = files.filter(f => f.type === 'file' && /\.csv$/.test(f.name));
+          if (!csvFiles.length) throw new Error('Aucun fichier CSV trouvé dans datasets/');
+          
+          // Trier par nom (assume format news_YYYYMMDD.csv)
+          csvFiles.sort((a,b) => b.name.localeCompare(a.name));
+          const latest = csvFiles[0];
+          
+          currentFilename = latest.name; 
+          currentSha = latest.sha;
+          ghStatus.textContent = `📥 Chargement ${latest.name}...`;
+          
+          const contentObj = await githubRequest(`contents/datasets/${latest.name}?ref=${branch}`);
+          const csvText = atob(contentObj.content.replace(/\n/g, ''));
+          
+          const res = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+          headers = res.meta.fields; 
+          rows = res.data;
+          renderTable(); 
+          enableLocalBtns();
+          ghStatus.textContent = `✅ ${rows.length} lignes chargées depuis GitHub (${latest.name})`;
+          validationResults.classList.add('hidden');
+        } catch (err) {
+          ghStatus.textContent = '❌ Erreur: ' + err.message;
+          console.error(err);
+        }
+      });
+
+      // Commit back to GitHub
+      pushGithubBtn.addEventListener('click', async () => {
+        try {
+          ghStatus.textContent = '📤 Commit en cours...';
+          const branch = ghBranchInp.value.trim() || 'main';
+          const csv = Papa.unparse(rows, { columns: headers });
+          const b64 = btoa(unescape(encodeURIComponent(csv)));
+          
+          const body = {
+            message: `Update ${currentFilename || 'dataset'} via web editor (${rows.length} lignes)`,
+            content: b64,
+            branch
+          };
+          if (currentSha) body.sha = currentSha;
+          
+          const res = await githubRequest(`contents/datasets/${currentFilename}`, 'PUT', body);
+          currentSha = res.content.sha;
+          ghStatus.textContent = `✅ Commit ${res.commit.sha.slice(0,7)} poussé`;
+        } catch (err) {
+          ghStatus.textContent = '❌ Erreur: ' + err.message;
+          console.error(err);
+        }
+      });
+
+      // Déclencher workflow GitHub Actions
+      triggerWorkflowBtn.addEventListener('click', async () => {
+        try {
+          ghStatus.textContent = '🚀 Déclenchement du workflow...';
+          const branch = ghBranchInp.value.trim() || 'main';
+          
+          await githubRequest('actions/workflows/finetune-model.yml/dispatches', 'POST', {
+            ref: branch,
+            inputs: {
+              dataset: 'auto-latest',
+              model_name: 'yiyanghkust/finbert-tone',
+              epochs: '3',
+              learning_rate: '2e-5',
+              push_to_hub: 'false'
+            }
+          });
+          
+          ghStatus.textContent = '✅ Workflow déclenché ! Vérifiez l\'onglet Actions';
+        } catch (err) {
+          ghStatus.textContent = '❌ Erreur workflow: ' + err.message;
+          console.error(err);
+        }
+      });
+
+      // Initialisation
+      document.addEventListener('DOMContentLoaded', () => {
+        // Pré-remplir le repo si on est sur GitHub
+        if (window.location.hostname.includes('github')) {
+          const pathParts = window.location.pathname.split('/');
+          if (pathParts.length >= 3) {
+            ghRepoInp.value = `${pathParts[1]}/${pathParts[2]}`;
+          }
+        }
+      });
+    </script>
+  </body>
+</html>
