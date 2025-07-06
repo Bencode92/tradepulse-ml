@@ -2,6 +2,24 @@
 
 Repository privé pour le fine-tuning de modèles FinBERT pour l'analyse de sentiment financier de TradePulse avec **validation automatique des datasets** et **interface web moderne**.
 
+## 🚨 CI Échoue ? Correction Express ! 
+
+Si votre CI échoue sur le formatage du code :
+
+```bash
+# Solution automatique (RECOMMANDÉ)
+chmod +x fix-ci.sh && ./fix-ci.sh
+
+# Solution manuelle 
+python -m pip install black isort ruff
+black --line-length 88 scripts/
+isort --profile black scripts/
+ruff check scripts/ --fix
+git add scripts/ && git commit -m "style: format code (CI fix)" && git push
+```
+
+📖 **Guide complet** : [CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)
+
 ## 🚀 Utilisation rapide
 
 ### 1. Via l'éditeur web (NOUVEAU ! 🔥)
@@ -53,7 +71,11 @@ python scripts/finetune.py --dataset datasets/news_20250706.csv --output_dir mod
 
 ```
 tradepulse-ml/
-├── 🌐 news_editor.html              # NOUVEAU ! Éditeur web moderne
+├── 🛠️ fix-ci.sh                     # NOUVEAU ! Correction express CI
+├── 🔧 setup-dev.sh                  # NOUVEAU ! Setup environnement dev
+├── 📖 CI_FIX_GUIDE.md               # NOUVEAU ! Guide correction CI
+├── 🌐 news_editor.html              # Éditeur web moderne
+├── 📁 .vscode/settings.json         # NOUVEAU ! Config VSCode optimisée
 ├── 📁 .github/workflows/            # GitHub Actions
 │   ├── finetune-model.yml           # Workflow de fine-tuning (amélioré)
 │   ├── dataset-quality-gate.yml     # Validation des datasets
@@ -69,12 +91,14 @@ tradepulse-ml/
 ├── 📁 scripts/                      # Scripts Python
 │   ├── finetune.py                  # Script principal de fine-tuning (+ auto-sélection)
 │   ├── validate_dataset.py          # Validation datasets (+ auto-sélection)
-│   ├── utils.py                     # NOUVEAU ! Utilitaires d'auto-sélection
-│   ├── auto-pipeline.sh             # NOUVEAU ! Pipeline express
+│   ├── utils.py                     # Utilitaires d'auto-sélection
+│   ├── auto-pipeline.sh             # Pipeline express
+│   ├── format-check.sh              # NOUVEAU ! Vérification formatage
 │   ├── collect_news.py              # Collecte d'actualités
 │   └── test_validation.py           # Tests de validation
 ├── 📁 config/                       # Configuration
 ├── 📁 notebooks/                    # Jupyter notebooks
+├── .pre-commit-config.yaml          # AMÉLIORÉ ! Config pre-commit synchronisée
 ├── requirements.txt                 # Dépendances Python de base
 ├── requirements-ml.txt              # Dépendances ML complètes
 ├── DATASET_WORKFLOW.md             # Guide validation
@@ -83,7 +107,42 @@ tradepulse-ml/
 └── README.md                       # Ce fichier
 ```
 
-## 🎨 Éditeur web moderne (NOUVEAU !)
+## 🔧 Outils de Développement (NOUVEAU !)
+
+### 🛠️ Correction CI Express
+
+```bash
+# Option 1: Script automatique (RECOMMANDÉ)
+./fix-ci.sh                         # Corrige tout automatiquement
+
+# Option 2: Vérification manuelle
+./scripts/format-check.sh           # Vérifie le formatage
+./scripts/format-check.sh --fix     # Corrige automatiquement
+
+# Option 3: Setup environnement complet
+./setup-dev.sh                      # Configure pre-commit + IDE
+```
+
+### 🎣 Pre-commit automatique
+
+```bash
+# Installation (une seule fois)
+pip install pre-commit
+pre-commit install
+
+# Usage automatique
+git commit                          # Les hooks s'exécutent automatiquement !
+```
+
+### 💻 Configuration IDE
+
+Le projet inclut une configuration VSCode optimisée (`.vscode/settings.json`) :
+- ✅ Black avec line-length 88 (identique CI)
+- ✅ isort avec profil Black  
+- ✅ Ruff pour le linting
+- ✅ Formatage automatique à la sauvegarde
+
+## 🎨 Éditeur web moderne
 
 ### ✨ Fonctionnalités
 
@@ -119,7 +178,7 @@ Token: ghp_xxx... (scope: repo)
 - "Commit vers GitHub" (push direct + déclenche CI)
 ```
 
-## ⚡ Pipeline express (NOUVEAU !)
+## ⚡ Pipeline express
 
 ### 🚀 Commandes disponibles
 
@@ -154,7 +213,7 @@ Token: ghp_xxx... (scope: repo)
 ./scripts/auto-pipeline.sh test models/finbert-20250706_142230
 ```
 
-## 🎯 Auto-sélection intelligente (NOUVEAU !)
+## 🎯 Auto-sélection intelligente
 
 Tous les scripts détectent automatiquement le **dernier dataset** au format `news_YYYYMMDD.csv` :
 
@@ -386,6 +445,19 @@ python scripts/finetune.py --output_dir models/finbert-auto
 
 ## 🚨 Dépannage
 
+### 🛠️ Problèmes CI (NOUVEAU !)
+
+```bash
+# CI échoue sur formatage ? Solution express :
+./fix-ci.sh
+
+# Vérification locale avant commit :
+./scripts/format-check.sh
+
+# Setup environnement complet :
+./setup-dev.sh
+```
+
 ### Auto-sélection
 
 ```bash
@@ -430,6 +502,7 @@ pip install -r requirements.txt
 
 ## 📚 Documentation détaillée
 
+- **[CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)** : **NOUVEAU !** Guide correction CI express
 - **[DATASET_WORKFLOW.md](DATASET_WORKFLOW.md)** : Guide complet du workflow de validation
 - **[ENTERPRISE_UPGRADE.md](ENTERPRISE_UPGRADE.md)** : Guide de mise à niveau entreprise
 - **[BUG_FIXES_AND_FEATURES.md](BUG_FIXES_AND_FEATURES.md)** : Changelog complet
@@ -451,10 +524,11 @@ Le modèle fine-tuné peut être intégré dans le système principal :
 ## 🎯 Nouveautés et améliorations
 
 ### ✨ Version actuelle
+- **🛠️ Outils de correction CI** : Scripts express pour résoudre les problèmes de formatage
+- **🔧 Environnement de développement** : Setup automatique avec pre-commit et config IDE
 - **🌐 Éditeur web moderne** avec interface glassmorphism
 - **⚡ Pipeline express** en une commande
 - **🎯 Auto-sélection intelligente** dans tous les scripts
-- **🔧 Utilitaires Python** réutilisables (`utils.py`)
 - **📊 Validation temps réel** dans l'interface web
 - **🚀 Déclenchement workflows** depuis l'éditeur
 
@@ -471,12 +545,13 @@ Le modèle fine-tuné peut être intégré dans le système principal :
 Pour toute question ou problème :
 - 🐛 **Issues** : Ouvrir une issue dans ce repository
 - 📋 **Logs** : Consulter Actions → Job logs
-- 📖 **Documentation** : DATASET_WORKFLOW.md + ce README
+- 📖 **Documentation** : CI_FIX_GUIDE.md + DATASET_WORKFLOW.md + ce README
 - 🔍 **Validation** : `python scripts/validate_dataset.py --help`
 - ⚡ **Pipeline** : `./scripts/auto-pipeline.sh help`
+- 🛠️ **CI Problems** : `./fix-ci.sh` ou voir CI_FIX_GUIDE.md
 
 ---
 
 **TradePulse ML** - Fine-tuning FinBERT avec interface web moderne et automation complète 🚀✨
 
-*Nouveau : Éditeur web + Auto-sélection + Pipeline express pour une productivité maximale !*
+*Nouveau : Outils de correction CI + Environnement de développement optimisé !*
