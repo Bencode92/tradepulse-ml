@@ -39,7 +39,9 @@ class TestDatasetValidator:
 
     def create_temp_csv(self, content: str) -> Path:
         """Crée un fichier CSV temporaire"""
-        temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False)
+        temp_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".csv", delete=False
+        )
         temp_file.write(content)
         temp_file.close()
         return Path(temp_file.name)
@@ -119,7 +121,9 @@ class TestDatasetValidator:
             assert len(invalid_label_errors) == 3  # bad, good, unknown
 
             # Vérifier les numéros de ligne
-            line_numbers = [error["line_number"] for error in invalid_label_errors]
+            line_numbers = [
+                error["line_number"] for error in invalid_label_errors
+            ]
             assert 3 in line_numbers  # "bad" à la ligne 3
             assert 4 in line_numbers  # "good" à la ligne 4
             assert 6 in line_numbers  # "unknown" à la ligne 6
@@ -224,7 +228,8 @@ class TestDatasetValidator:
 
             # Vérifier les warnings de distribution
             warning_types = [warning["type"] for warning in report["warnings"]]
-            assert "overrepresented_class" in warning_types  # positive sur-représentée
+            # positive sur-représentée
+            assert "overrepresented_class" in warning_types
 
         finally:
             csv_path.unlink()
@@ -380,7 +385,7 @@ class TestDatasetValidator:
             assert "statistics" in report
             stats = report["statistics"]
 
-            # Vérifier que toutes les valeurs numériques sont des types Python natifs
+            # Vérifier que toutes les valeurs numériques sont des types Python
             assert isinstance(stats["total_samples"], int)
             assert isinstance(stats["valid_samples"], int)
             assert isinstance(stats["avg_text_length"], float)
@@ -408,7 +413,8 @@ class TestDatasetValidator:
                 reloaded_report = json.load(f)
 
             assert (
-                reloaded_report["validation_success"] == report["validation_success"]
+                reloaded_report["validation_success"]
+                == report["validation_success"]
             )
             assert reloaded_report["error_count"] == report["error_count"]
             assert (
