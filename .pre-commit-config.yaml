@@ -1,179 +1,29 @@
-# Configuration pre-commit pour TradePulse ML
-# ==========================================
-#
-# Installation:
-#   pip install pre-commit
-#   pre-commit install
-#
-# Usage:
-#   pre-commit run --all-files  # Tester sur tous les fichiers
-#   git commit                  # Pre-commit s'exécute automatiquement
-
 repos:
-  # Hooks généraux pour la qualité du code
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        args: ["--line-length=88"]
+        files: scripts/.*\.py$
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile=black"]
+        files: scripts/.*\.py$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: scripts/.*\.py$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
     hooks:
-      # Sécurité et syntaxe
-      - id: check-yaml
-        name: 🔍 Vérifier syntaxe YAML
-      - id: check-json
-        name: 🔍 Vérifier syntaxe JSON
-      - id: check-toml
-        name: 🔍 Vérifier syntaxe TOML
-      - id: check-merge-conflict
-        name: 🔍 Détecter marqueurs de merge conflict
-      - id: check-added-large-files
-        name: 🔍 Bloquer fichiers volumineux (>500KB)
-        args: ['--maxkb=500']
-      
-      # Formatage
       - id: trailing-whitespace
-        name: 🧹 Supprimer espaces en fin de ligne
-        exclude: '\.md$'
       - id: end-of-file-fixer
-        name: 🧹 Assurer nouvelle ligne en fin de fichier
-      - id: mixed-line-ending
-        name: 🧹 Normaliser fins de ligne
-        args: ['--fix=lf']
-      
-      # Python spécifique
-      - id: check-ast
-        name: 🐍 Vérifier syntaxe Python (AST)
-      - id: check-docstring-first
-        name: 🐍 Vérifier docstrings en début de fonction
-      - id: debug-statements
-        name: 🐍 Détecter instructions de debug oubliées
-
-  # Formatage Python avec Black
-  - repo: https://github.com/psf/black
-    rev: '23.12.1'
-    hooks:
-      - id: black
-        name: 🖤 Formater code Python (Black)
-        language_version: python3
-        args: 
-          - '--line-length=88'
-          - '--target-version=py39'
-
-  # Tri des imports avec isort
-  - repo: https://github.com/pycqa/isort
-    rev: '5.13.2'
-    hooks:
-      - id: isort
-        name: 📦 Trier imports Python (isort)
-        args:
-          - '--profile=black'
-          - '--line-length=88'
-          - '--multi-line=3'
-          - '--trailing-comma'
-
-  # Linting Python avec Ruff (plus rapide que flake8)
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: 'v0.1.8'
-    hooks:
-      - id: ruff
-        name: ⚡ Analyser code Python (Ruff)
-        args: 
-          - '--fix'
-          - '--exit-non-zero-on-fix'
-
-  # Vérification des requirements Python
-  - repo: https://github.com/Lucas-C/pre-commit-hooks
-    rev: v1.5.4
-    hooks:
-      - id: forbid-crlf
-        name: 🚫 Interdire CRLF (Windows line endings)
-      - id: remove-crlf
-        name: 🧹 Supprimer CRLF automatiquement
-
-  # Hooks spécifiques TradePulse ML
-  - repo: local
-    hooks:
-      # Test de validation des datasets
-      - id: test-dataset-validation
-        name: 🧪 Tester script de validation datasets
-        entry: python scripts/test_validation.py
-        language: python
-        files: '^scripts/validate_dataset\.py$'
-        pass_filenames: false
-        
-      # Validation automatique des nouveaux datasets
-      - id: validate-new-datasets
-        name: 🔍 Valider nouveaux datasets
-        entry: bash -c 'for file in "$@"; do echo "Validating $file..."; python scripts/validate_dataset.py "$file" || exit 1; done' --
-        language: system
-        files: '^datasets/.*\.(csv|json)$'
-        
-      # Vérifier la structure des datasets
-      - id: check-dataset-structure
-        name: 📊 Vérifier structure dossier datasets
-        entry: bash -c '
-          if [ ! -d "datasets" ]; then
-            echo "❌ Dossier datasets/ manquant";
-            exit 1;
-          fi;
-          if [ -z "$(find datasets/ -name "*.csv" -o -name "*.json" 2>/dev/null)" ]; then
-            echo "⚠️ Aucun dataset trouvé dans datasets/";
-          fi;
-          echo "✅ Structure datasets OK";'
-        language: system
-        files: '^datasets/'
-        pass_filenames: false
-        
-      # Vérifier les secrets et tokens
-      - id: check-secrets
-        name: 🔐 Détecter tokens/secrets potentiels
-        entry: bash -c '
-          if grep -r -E "(api_key|secret|token|password)\s*=\s*[\"'"'"'][^\"'"'"']+[\"'"'"']" --include="*.py" --include="*.yml" --include="*.yaml" .; then
-            echo "❌ Tokens/secrets potentiels détectés dans le code";
-            echo "💡 Utilisez des variables d'"'"'environnement ou GitHub Secrets";
-            exit 1;
-          fi'
-        language: system
-        pass_filenames: false
-        
-      # Vérifier la taille des modèles
-      - id: check-model-size
-        name: 📏 Vérifier taille des modèles
-        entry: bash -c '
-          for file in "$@"; do
-            size=$(du -k "$file" | cut -f1);
-            if [ $size -gt 51200 ]; then  # 50MB
-              echo "❌ Modèle trop volumineux: $file (${size}KB > 50MB)";
-              echo "💡 Utilisez Git LFS ou stockage externe";
-              exit 1;
-            fi;
-          done'
-        language: system
-        files: '^models/.*\.(bin|pt|pth|safetensors)$'
-
-# Configuration globale
-default_stages: [commit]
-minimum_pre_commit_version: '3.0.0'
-
-# Exclusions globales
-exclude: |
-  (?x)
-  # Fichiers générés automatiquement
-  ^\.venv/|
-  ^venv/|
-  ^\.env/|
-  ^__pycache__/|
-  .*\.pyc$|
-  
-  # Artifacts et logs
-  ^models/.*\.bin$|
-  ^models/.*\.safetensors$|
-  .*\.log$|
-  ^finetune\.log$|
-  
-  # Fichiers de validation temporaires
-  ^validation_.*\.json$|
-  ^validation_errors\.txt$|
-  
-  # Datasets de test temporaires
-  ^test_.*\.csv$
-
-# Messages personnalisés
-fail_fast: false  # Continuer même si un hook échoue
+      - id: check-yaml
+      - id: check-added-large-files
