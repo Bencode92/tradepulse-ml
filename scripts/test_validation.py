@@ -125,7 +125,9 @@ class TestDatasetValidator:
             assert len(invalid_label_errors) == 3  # bad, good, unknown
 
             # Vérifier les numéros de ligne
-            line_numbers = [error["line_number"] for error in invalid_label_errors]
+            line_numbers = [
+                error["line_number"] for error in invalid_label_errors
+            ]
             assert 3 in line_numbers  # "bad" à la ligne 3
             assert 4 in line_numbers  # "good" à la ligne 4
             assert 6 in line_numbers  # "unknown" à la ligne 6
