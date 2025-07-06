@@ -123,7 +123,8 @@ class NewsCollector:
         )
         selected_samples.extend(
             random.sample(
-                neutral_samples, min(samples_per_class + remaining, len(neutral_samples))
+                neutral_samples,
+                min(samples_per_class + remaining, len(neutral_samples)),
             )
         )
 
@@ -135,7 +136,9 @@ class NewsCollector:
         labeled_samples.extend(
             [
                 (text, "negative")
-                for text in selected_samples[samples_per_class : 2 * samples_per_class]
+                for text in selected_samples[
+                    samples_per_class : 2 * samples_per_class
+                ]
             ]
         )
         labeled_samples.extend(
@@ -388,7 +391,8 @@ def main():
         help="Fichier de sortie (défaut: datasets/news_YYYYMMDD.csv)",
     )
     parser.add_argument(
-        "--newsapi-key", help="Clé API NewsAPI (ou utiliser variable NEWSAPI_KEY)"
+        "--newsapi-key",
+        help="Clé API NewsAPI (ou utiliser variable NEWSAPI_KEY)",
     )
     parser.add_argument(
         "--output-dir",
@@ -422,8 +426,13 @@ def main():
         # Suggestion pour la suite
         print("\n🚀 Prochaines étapes:")
         print(f"  1. Valider: python scripts/validate_dataset.py {output_file}")
-        print(f"  2. Commit: git add {output_file} && git commit -m 'Add daily dataset'")
-        print(f"  3. Push: git push (déclenche validation + fine-tuning automatique)")
+        print(
+            f"  2. Commit: git add {output_file} && "
+            "git commit -m 'Add daily dataset'"
+        )
+        print(
+            "  3. Push: git push (déclenche validation + fine-tuning automatique)"
+        )
 
     except Exception as e:
         logger.error(f"❌ Erreur lors de la collecte: {e}")
