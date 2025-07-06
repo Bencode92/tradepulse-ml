@@ -1,46 +1,69 @@
-# .pre-commit-config.yaml
 # Configuration pre-commit pour TradePulse ML
+# Synchronisé avec la CI GitHub Actions
 
 repos:
-  # Black - Formatage automatique Python
+  # 1. Black - Formatage Python (identique à la CI)
   - repo: https://github.com/psf/black
-    rev: 24.3.0  # Utiliser la dernière version stable
+    rev: 24.4.2
     hooks:
       - id: black
         args: ["--line-length=88"]
-        language_version: python3
+        files: ^scripts/.*\.py$
+        name: "Black (Python formatter)"
+        description: "Format Python code with Black"
 
-  # isort - Tri automatique des imports (compatible Black)
+  # 2. isort - Tri des imports (identique à la CI)  
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
       - id: isort
-        args: ["--profile=black"]
+        args: ["--profile", "black"]
+        files: ^scripts/.*\.py$
+        name: "isort (Import sorter)"
+        description: "Sort Python imports"
 
-  # Ruff - Linter rapide et moderne
+  # 3. Ruff - Linting rapide (identique à la CI)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.1
+    rev: v0.4.5
     hooks:
       - id: ruff
         args: ["--fix"]
-      - id: ruff-format
+        files: ^scripts/.*\.py$
+        name: "Ruff (Fast linter)"
+        description: "Fast Python linter with auto-fix"
 
-  # Hooks additionnels pour la qualité
+  # 4. Contrôles supplémentaires utiles
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.5.0
+    rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        name: "Remove trailing whitespace"
       - id: end-of-file-fixer
+        name: "Fix end of files"
       - id: check-yaml
+        name: "Check YAML syntax"
+        files: \.(yaml|yml)$
+      - id: check-json
+        name: "Check JSON syntax"
       - id: check-added-large-files
+        name: "Check for large files"
+        args: ['--maxkb=10240']  # 10MB max
       - id: check-merge-conflict
-      - id: debug-statements
-      - id: requirements-txt-fixer
+        name: "Check for merge conflicts"
 
-  # Validation JSON/YAML
-  - repo: https://github.com/pre-commit/mirrors-prettier
-    rev: v4.0.0-alpha.8
-    hooks:
-      - id: prettier
-        files: \.(json|yaml|yml|md)$
-        exclude: ^(datasets/|models/)
+# Configuration globale
+default_language_version:
+  python: python3.9
+
+# Optimisations
+ci:
+  autofix_commit_msg: |
+    [pre-commit.ci] auto fixes from pre-commit hooks
+
+    for more information, see https://pre-commit.ci
+  autofix_prs: true
+  autoupdate_branch: ''
+  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
+  autoupdate_schedule: weekly
+  skip: []
+  submodules: false
