@@ -17,6 +17,9 @@ $ python finetune.py \
     --dataset datasets/news_20250705.csv \
     --output_dir models/finbert-v1 \
     --model_name yiyanghkust/finbert-tone
+
+Ou avec auto-sélection :
+$ python finetune.py --output_dir models/finbert-auto  # Auto-détecte le dernier dataset
 """
 from __future__ import annotations
 
@@ -43,6 +46,13 @@ from transformers import (
     EvalPrediction,
     set_seed,
 )
+
+# Auto-sélection helper
+try:
+    from utils import latest_dataset, get_date_from_filename
+    AUTOSEL = True
+except ImportError:
+    AUTOSEL = False
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -197,7 +207,7 @@ class Finetuner:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="TradePulse FinBERT fine‑tuning utility")
-    p.add_argument("--dataset", required=True, type=Path, help="Path to CSV/JSON dataset")
+    p.add_argument("--dataset", type=Path, help="Path to CSV/JSON dataset (auto-détection si omis)")
     p.add_argument("--output_dir", required=True, type=Path, help="Where to save the model & logs")
     p.add_argument("--model_name", default="yiyanghkust/finbert-tone")
     p.add_argument("--epochs", type=int, default=3)
@@ -222,6 +232,29 @@ def build_parser() -> argparse.ArgumentParser:
 def main():
     args = build_parser().parse_args()
     set_seed(args.seed)
+
+    # Auto-sélection dataset
+    if args.dataset is None and AUTOSEL:
+        args.dataset = latest_dataset()
+        if args.dataset:
+            logger.info("🕵️  Auto-sélection dataset : %s", args.dataset)
+        else:
+            logger.error("❌ Aucun dataset trouvé")
+            logger.info("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            return
+    elif args.dataset is None:
+        logger.error("❌ Aucun dataset spécifié et auto-sélection non disponible")
+        logger.info("💡 Utilisez: python scripts/finetune.py --dataset datasets/votre_fichier.csv --output_dir models/test")
+        return
+
+    # Auto-génération nom de modèle basé sur la date du dataset
+    if AUTOSEL and args.dataset:
+        date_str = get_date_from_filename(str(args.dataset))
+        if date_str and str(args.output_dir).endswith("-auto"):
+            # Si output_dir se termine par -auto, on le remplace par la date
+            new_output = str(args.output_dir).replace("-auto", f"-{date_str}")
+            args.output_dir = Path(new_output)
+            logger.info("📂 Nom de modèle auto-généré : %s", args.output_dir)
 
     tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
     ds = tuner.load_dataset(args.dataset)
