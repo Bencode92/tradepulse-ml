@@ -2,9 +2,9 @@
 """
 Utilitaires pour TradePulse ML - Auto-sélection des datasets
 """
-from pathlib import Path
 import re
-from typing import Optional, List
+from pathlib import Path
+from typing import List, Optional
 
 CSV_PATTERN = re.compile(r"news_(\d{8})\.csv$")
 
