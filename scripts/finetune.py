@@ -50,6 +50,7 @@ from transformers import (
 # Auto-sélection helper
 try:
     from utils import latest_dataset, get_date_from_filename
+
     AUTOSEL = True
 except ImportError:
     AUTOSEL = False
@@ -59,18 +60,17 @@ except ImportError:
 # ---------------------------------------------------------------------------
 LOG_FMT = "%(asctime)s — %(levelname)s — %(message)s"
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     format=LOG_FMT,
-    handlers=[
-        logging.FileHandler("finetune.log"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler("finetune.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger("tradepulse-finetune")
 
 # ---------------------------------------------------------------------------
 # Fine‑tuner class
 # ---------------------------------------------------------------------------
+
+
 class Finetuner:
     LABEL_MAP: Dict[str, int] = {"negative": 0, "neutral": 1, "positive": 2}
     ID2LABEL: Dict[int, str] = {v: k for k, v in LABEL_MAP.items()}
@@ -100,8 +100,15 @@ class Finetuner:
     def _standardise(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
         out: List[Dict[str, str]] = []
         for row in rows:
-            text = row.get("text") or f"{row.get('title', '')} {row.get('content', '')}".strip()
-            label = (row.get("label") or row.get("sentiment") or row.get("impact") or "").lower()
+            text = row.get("text") or (
+                f"{row.get('title', '')} {row.get('content', '')}".strip()
+            )
+            label = (
+                row.get("label")
+                or row.get("sentiment")
+                or row.get("impact")
+                or ""
+            ).lower()
             if not text or label not in self.LABEL_MAP:
                 continue
             out.append({"text": text, "label": self.LABEL_MAP[label]})
@@ -112,7 +119,7 @@ class Finetuner:
         raw = self._load_raw(path)
         data = self._standardise(raw)
         if not data:
-            raise RuntimeError("No usable samples detected in dataset !" )
+            raise RuntimeError("No usable samples detected in dataset !")
         logger.info("📊 %d samples after cleaning", len(data))
 
         train, val = train_test_split(
@@ -130,8 +137,12 @@ class Finetuner:
                 max_length=self.max_length,
             )
 
-        train_ds = Dataset.from_list(train).map(tok, batched=True, remove_columns=["text"])
-        val_ds = Dataset.from_list(val).map(tok, batched=True, remove_columns=["text"])
+        train_ds = Dataset.from_list(train).map(
+            tok, batched=True, remove_columns=["text"]
+        )
+        val_ds = Dataset.from_list(val).map(
+            tok, batched=True, remove_columns=["text"]
+        )
         return DatasetDict(train=train_ds, validation=val_ds)
 
     # ---------------------------------------------------------------------
@@ -141,7 +152,9 @@ class Finetuner:
     def _metrics(pred: EvalPrediction) -> Dict[str, float]:
         logits, labels = pred
         preds = np.argmax(logits, axis=1)
-        prec, rec, f1, _ = precision_recall_fscore_support(labels, preds, average="weighted")
+        prec, rec, f1, _ = precision_recall_fscore_support(
+            labels, preds, average="weighted"
+        )
         acc = accuracy_score(labels, preds)
         return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
@@ -188,7 +201,11 @@ class Finetuner:
         trainer.save_model()
 
         eval_res = trainer.evaluate()
-        logger.info("✅ Training complete — F1: %.4f | Acc: %.4f", eval_res["eval_f1"], eval_res["eval_accuracy"])
+        logger.info(
+            "✅ Training complete — F1: %.4f | Acc: %.4f",
+            eval_res["eval_f1"],
+            eval_res["eval_accuracy"],
+        )
 
         # save a report
         report = {
@@ -201,14 +218,25 @@ class Finetuner:
         with open(Path(args.output_dir, "training_report.json"), "w") as fh:
             json.dump(report, fh, indent=2)
 
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="TradePulse FinBERT fine‑tuning utility")
-    p.add_argument("--dataset", type=Path, help="Path to CSV/JSON dataset (auto-détection si omis)")
-    p.add_argument("--output_dir", required=True, type=Path, help="Where to save the model & logs")
+    p.add_argument(
+        "--dataset",
+        type=Path,
+        help="Path to CSV/JSON dataset (auto-détection si omis)",
+    )
+    p.add_argument(
+        "--output_dir",
+        required=True,
+        type=Path,
+        help="Where to save the model & logs",
+    )
     p.add_argument("--model_name", default="yiyanghkust/finbert-tone")
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
@@ -222,12 +250,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--logging_steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--push", action="store_true", help="Push model to HF Hub")
-    p.add_argument("--hub_id", type=str, default=None, help="HF repo id (org/model)")
+    p.add_argument(
+        "--hub_id", type=str, default=None, help="HF repo id (org/model)"
+    )
     return p
+
 
 # ---------------------------------------------------------------------------
 # Entrée principale
 # ---------------------------------------------------------------------------
+
 
 def main():
     args = build_parser().parse_args()
@@ -240,11 +272,16 @@ def main():
             logger.info("🕵️  Auto-sélection dataset : %s", args.dataset)
         else:
             logger.error("❌ Aucun dataset trouvé")
-            logger.info("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            logger.info(
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+            )
             return
     elif args.dataset is None:
         logger.error("❌ Aucun dataset spécifié et auto-sélection non disponible")
-        logger.info("💡 Utilisez: python scripts/finetune.py --dataset datasets/votre_fichier.csv --output_dir models/test")
+        logger.info(
+            "💡 Utilisez: python scripts/finetune.py "
+            "--dataset datasets/votre_fichier.csv --output_dir models/test"
+        )
         return
 
     # Auto-génération nom de modèle basé sur la date du dataset
@@ -259,6 +296,7 @@ def main():
     tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
     ds = tuner.load_dataset(args.dataset)
     tuner.train(ds, args)
+
 
 if __name__ == "__main__":
     main()
