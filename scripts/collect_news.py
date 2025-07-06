@@ -508,9 +508,7 @@ def main():
 
         # Suggestion pour la suite
         print("\n🚀 Prochaines étapes:")
-        print(
-            f"  1. Valider: python scripts/validate_dataset.py {output_file}"
-        )
+        print(f"  1. Valider: python scripts/validate_dataset.py {output_file}")
         print(
             f"  2. Commit: git add {output_file} && "
             "git commit -m 'Add daily dataset'"
