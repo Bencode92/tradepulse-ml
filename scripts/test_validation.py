@@ -16,14 +16,15 @@ Tests:
 - Sérialisation JSON (fix numpy types)
 """
 
-import pytest
-import tempfile
 import json
-from pathlib import Path
-import pandas as pd
-import sys
 import os
+import sys
+import tempfile
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
+import pytest
 
 # Ajouter le dossier scripts au path pour importer validate_dataset
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
