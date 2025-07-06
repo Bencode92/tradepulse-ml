@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TradePulse – Éditeur & GitHub Sync</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js" integrity="sha512-sUGkJws2DGpIJ9nnwBtN3i/CfgkVUO+Q1ovYvvG3nX2z1GDQeicnG1c8HjvU6Nu4El3PReQ7ZHsW42N9lDmfZQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
   </head>
   <body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
     <div class="max-w-7xl mx-auto space-y-6">
@@ -432,6 +432,7 @@
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         
         console.log('Repository initialisé:', ghRepoInp.value);
+        console.log('PapaParse chargé:', typeof Papa !== 'undefined' ? '✅' : '❌');
       });
     </script>
   </body>
