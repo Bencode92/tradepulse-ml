@@ -29,14 +29,16 @@ def check_black_formatting():
     """Vérifie le formatage Black"""
     print("🔍 Vérification formatage Black...")
 
-    code, stdout, stderr = run_command([
-        "python",
-        "-m",
-        "black",
-        "--check",
-        "--line-length=88",
-        "scripts/",
-    ])
+    code, stdout, stderr = run_command(
+        [
+            "python",
+            "-m",
+            "black",
+            "--check",
+            "--line-length=88",
+            "scripts/",
+        ]
+    )
 
     if code == 0:
         print("✅ Black check: OK")
@@ -56,14 +58,16 @@ def check_isort_formatting():
     """Vérifie le tri des imports"""
     print("\n🔍 Vérification tri imports isort...")
 
-    code, stdout, stderr = run_command([
-        "python",
-        "-m",
-        "isort",
-        "--check-only",
-        "--profile=black",
-        "scripts/",
-    ])
+    code, stdout, stderr = run_command(
+        [
+            "python",
+            "-m",
+            "isort",
+            "--check-only",
+            "--profile=black",
+            "scripts/",
+        ]
+    )
 
     if code == 0:
         print("✅ isort check: OK")
@@ -83,7 +87,9 @@ def check_ruff_linting():
     """Vérifie le linting Ruff"""
     print("\n🔍 Vérification linting Ruff...")
 
-    code, stdout, stderr = run_command(["python", "-m", "ruff", "check", "scripts/"])
+    code, stdout, stderr = run_command(
+        ["python", "-m", "ruff", "check", "scripts/"]
+    )
 
     if code == 0:
         print("✅ Ruff check: OK")

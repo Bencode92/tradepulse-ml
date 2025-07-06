@@ -63,7 +63,10 @@ LOG_FMT = "%(asctime)s — %(levelname)s — %(message)s"
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FMT,
-    handlers=[logging.FileHandler("finetune.log"), logging.StreamHandler()],
+    handlers=[
+        logging.FileHandler("finetune.log"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger("tradepulse-finetune")
 

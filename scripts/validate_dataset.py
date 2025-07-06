@@ -209,9 +209,7 @@ class DatasetValidator:
             if pd.isnull(text_value) or text_value == "":
                 if text_value == "":
                     # Chaîne vide explicite
-                    self.add_error(
-                        "empty_text", f"Texte vide", line_num, "text"
-                    )
+                    self.add_error("empty_text", f"Texte vide", line_num, "text")
                 else:
                     # Vraiment null/NaN (cellule vide)
                     self.add_error(
@@ -221,9 +219,7 @@ class DatasetValidator:
                 # Vérifier si c'est juste des espaces
                 text_str = str(text_value).strip()
                 if text_str == "" or text_str.lower() == "nan":
-                    self.add_error(
-                        "empty_text", f"Texte vide", line_num, "text"
-                    )
+                    self.add_error("empty_text", f"Texte vide", line_num, "text")
 
             # Vérification des labels
             label_value = row.get("label")
@@ -261,9 +257,7 @@ class DatasetValidator:
             return
 
         # Filtrer les labels valides pour les stats
-        valid_labels = df[
-            df["label"].astype(str).str.match(RE_LABEL, na=False)
-        ]
+        valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)]
         if valid_labels.empty:
             self.add_error("no_valid_labels", "Aucun label valide trouvé")
             return
@@ -409,7 +403,7 @@ class DatasetValidator:
 
         # Erreurs détaillées
         if report["errors"]:
-            print(f"\n❌ ERREURS CRITIQUES ({len(report['errors'])}):")
+            print(f"\n❌ ERREURS CRITIQUES ({len(report['errors'])})")
             for error in report["errors"]:
                 line_info = (
                     f" (ligne {error['line_number']})"
@@ -420,7 +414,7 @@ class DatasetValidator:
 
         # Avertissements détaillés
         if report["warnings"]:
-            print(f"\n⚠️ AVERTISSEMENTS ({len(report['warnings'])}):")
+            print(f"\n⚠️ AVERTISSEMENTS ({len(report['warnings'])})")
             for warning in report["warnings"]:
                 line_info = (
                     f" (ligne {warning['line_number']})"
