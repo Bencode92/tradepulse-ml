@@ -21,15 +21,15 @@ Output:
     datasets/news_YYYYMMDD.csv avec colonnes text,label
 """
 
-import csv
-import os
-import datetime
-import zoneinfo
 import argparse
+import csv
+import datetime
 import logging
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+import os
 import random
+import zoneinfo
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 # Configuration des logs
 logging.basicConfig(
@@ -112,10 +112,14 @@ class NewsCollector:
 
         selected_samples = []
         selected_samples.extend(
-            random.sample(positive_samples, min(samples_per_class, len(positive_samples)))
+            random.sample(
+                positive_samples, min(samples_per_class, len(positive_samples))
+            )
         )
         selected_samples.extend(
-            random.sample(negative_samples, min(samples_per_class, len(negative_samples)))
+            random.sample(
+                negative_samples, min(samples_per_class, len(negative_samples))
+            )
         )
         selected_samples.extend(
             random.sample(
@@ -135,10 +139,7 @@ class NewsCollector:
             ]
         )
         labeled_samples.extend(
-            [
-                (text, "neutral")
-                for text in selected_samples[2 * samples_per_class :]
-            ]
+            [(text, "neutral") for text in selected_samples[2 * samples_per_class :]]
         )
 
         # Mélanger l'ordre
