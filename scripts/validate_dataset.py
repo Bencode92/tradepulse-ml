@@ -175,9 +175,7 @@ class DatasetValidator:
             extra = actual_cols - expected_cols
 
             if missing:
-                self.add_error(
-                    "missing_columns", f"Colonnes manquantes: {missing}"
-                )
+                self.add_error("missing_columns", f"Colonnes manquantes: {missing}")
             if extra:
                 self.add_warning(
                     "extra_columns", f"Colonnes supplémentaires: {extra}"
@@ -224,9 +222,7 @@ class DatasetValidator:
             # Vérification des labels
             label_value = row.get("label")
             if pd.isnull(label_value) or label_value == "":
-                self.add_error(
-                    "missing_label", f"Label manquant", line_num, "label"
-                )
+                self.add_error("missing_label", f"Label manquant", line_num, "label")
             else:
                 label_str = str(label_value).strip()
                 if not RE_LABEL.match(label_str):
