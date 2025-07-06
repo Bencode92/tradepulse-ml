@@ -144,7 +144,12 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            df = pd.read_csv(csv_path)
+            # FIX: Paramètres pandas pour distinguer "" vs cellules vides
+            df = pd.read_csv(
+                csv_path,
+                keep_default_na=False,  # NE transforme plus "" en NaN
+                na_values=[""],  # mais garde les vraies cellules vides ( , )
+            )
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
             return False, self._generate_report()
@@ -152,7 +157,7 @@ class DatasetValidator:
         # Série de validations avec numéros de ligne
         self._check_structure(df)
         self._check_content_detailed(df)
-        self._check_class_distribution(df)  # Fixed method name
+        self._check_class_distribution(df)
         self._check_quality_detailed(df)
 
         success = len(self.errors) == 0
@@ -200,22 +205,29 @@ class DatasetValidator:
             # CORRECTION : Logique améliorée pour empty vs missing
             text_value = row.get("text")
 
-            # Ordre important : vérifier d'abord si vide, puis si null
-            if not pd.isnull(text_value):
+            # Avec keep_default_na=False, "" reste "" et NaN reste NaN
+            if pd.isnull(text_value) or text_value == "":
+                if text_value == "":
+                    # Chaîne vide explicite
+                    self.add_error(
+                        "empty_text", f"Texte vide", line_num, "text"
+                    )
+                else:
+                    # Vraiment null/NaN (cellule vide)
+                    self.add_error(
+                        "missing_text", f"Texte manquant", line_num, "text"
+                    )
+            else:
+                # Vérifier si c'est juste des espaces
                 text_str = str(text_value).strip()
                 if text_str == "" or text_str.lower() == "nan":
                     self.add_error(
                         "empty_text", f"Texte vide", line_num, "text"
                     )
-            else:
-                # Vraiment null/NaN
-                self.add_error(
-                    "missing_text", f"Texte manquant", line_num, "text"
-                )
 
             # Vérification des labels
             label_value = row.get("label")
-            if pd.isnull(label_value):
+            if pd.isnull(label_value) or label_value == "":
                 self.add_error(
                     "missing_label", f"Label manquant", line_num, "label"
                 )
@@ -272,7 +284,7 @@ class DatasetValidator:
                     f"Classe '{label}' sous-représentée: "
                     f"{count} ({percentage:.1%})",
                 )
-            elif percentage >= self.overrep_threshold:  # Fixed: 70% threshold
+            elif percentage >= self.overrep_threshold:  # 70% threshold
                 self.add_warning(
                     "overrepresented_class",
                     f"Classe '{label}' sur-représentée: "
@@ -285,7 +297,7 @@ class DatasetValidator:
             return
 
         for idx, row in df.iterrows():
-            if pd.isnull(row["text"]):
+            if pd.isnull(row["text"]) or row["text"] == "":
                 continue
 
             text = str(row["text"])
@@ -349,7 +361,7 @@ class DatasetValidator:
                 else pd.DataFrame()
             )
 
-            # Conversion explicite de tous les types numpy en types Python natifs
+            # Conversion explicite des types numpy en types Python natifs
             text_lengths = (
                 df["text"].str.len()
                 if "text" in df.columns

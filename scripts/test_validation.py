@@ -370,7 +370,7 @@ class TestDatasetValidator:
 
     def test_numpy_json_serialization_fix(self):
         """Test spécifique pour la sérialisation des types numpy.
-        
+
         Fix du bug de sérialisation.
         """
         content = """text,label
