@@ -176,7 +176,9 @@ class TestDatasetValidator:
             assert report["warning_count"] > 0
 
             # Vérifier qu'on a bien des warnings de doublons
-            warning_types = [warning["type"] for warning in report["warnings"]]
+            warning_types = [
+                warning["type"] for warning in report["warnings"]
+            ]
             assert "duplicate_text" in warning_types
 
             # Les stats devraient indiquer des doublons
@@ -201,7 +203,9 @@ class TestDatasetValidator:
             success, report = self.validator.validate(csv_path)
 
             # Vérifier les warnings de longueur
-            warning_types = [warning["type"] for warning in report["warnings"]]
+            warning_types = [
+                warning["type"] for warning in report["warnings"]
+            ]
             assert "text_too_long" in warning_types  # Texte trop long
             assert "very_short_text" in warning_types  # "X" est trop court
 
@@ -231,7 +235,9 @@ class TestDatasetValidator:
             assert report["warning_count"] > 0
 
             # Vérifier les warnings de distribution
-            warning_types = [warning["type"] for warning in report["warnings"]]
+            warning_types = [
+                warning["type"] for warning in report["warnings"]
+            ]
             # positive sur-représentée
             assert "overrepresented_class" in warning_types
 
@@ -251,7 +257,9 @@ class TestDatasetValidator:
             # Devrait réussir mais avec warning
             assert report["warning_count"] > 0
 
-            warning_types = [warning["type"] for warning in report["warnings"]]
+            warning_types = [
+                warning["type"] for warning in report["warnings"]
+            ]
             assert "insufficient_samples" in warning_types
 
         finally:
