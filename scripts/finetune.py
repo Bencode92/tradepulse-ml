@@ -63,10 +63,7 @@ LOG_FMT = "%(asctime)s — %(levelname)s — %(message)s"
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FMT,
-    handlers=[
-        logging.FileHandler("finetune.log"),
-        logging.StreamHandler(),
-    ],
+    handlers=[logging.FileHandler("finetune.log"), logging.StreamHandler()],
 )
 logger = logging.getLogger("tradepulse-finetune")
 
@@ -255,9 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval_strategy", default="epoch")
     p.add_argument("--logging_steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument(
-        "--push", action="store_true", help="Push model to HF Hub"
-    )
+    p.add_argument("--push", action="store_true", help="Push model to HF Hub")
     p.add_argument(
         "--hub_id", type=str, default=None, help="HF repo id (org/model)"
     )
