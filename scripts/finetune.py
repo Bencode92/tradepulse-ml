@@ -19,7 +19,8 @@ $ python finetune.py \
     --model_name yiyanghkust/finbert-tone
 
 Ou avec auto-sélection :
-$ python finetune.py --output_dir models/finbert-auto  # Auto-détecte le dernier dataset
+$ python finetune.py --output_dir models/finbert-auto
+  # Auto-détecte le dernier dataset
 """
 from __future__ import annotations
 
@@ -87,9 +88,9 @@ class Finetuner:
         )
         logger.info("✅ Model & tokenizer loaded : %s", model_name)
 
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     # Data helpers
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     def _load_raw(self, path: Path) -> List[Dict[str, str]]:
         if path.suffix.lower() == ".csv":
             return pd.read_csv(path).to_dict("records")
@@ -145,9 +146,9 @@ class Finetuner:
         )
         return DatasetDict(train=train_ds, validation=val_ds)
 
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     # Metrics
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     @staticmethod
     def _metrics(pred: EvalPrediction) -> Dict[str, float]:
         logits, labels = pred
@@ -158,9 +159,9 @@ class Finetuner:
         acc = accuracy_score(labels, preds)
         return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     # Training
-    # ---------------------------------------------------------------------
+    # -------------------------------------------------------------------
     def train(self, ds: DatasetDict, args: argparse.Namespace):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_name = f"finbert-{ts}"
@@ -251,7 +252,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval_strategy", default="epoch")
     p.add_argument("--logging_steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--push", action="store_true", help="Push model to HF Hub")
+    p.add_argument(
+        "--push", action="store_true", help="Push model to HF Hub"
+    )
     p.add_argument(
         "--hub_id", type=str, default=None, help="HF repo id (org/model)"
     )
@@ -280,7 +283,9 @@ def main():
             )
             return
     elif args.dataset is None:
-        logger.error("❌ Aucun dataset spécifié et auto-sélection non disponible")
+        logger.error(
+            "❌ Aucun dataset spécifié et auto-sélection non disponible"
+        )
         logger.info(
             "💡 Utilisez: python scripts/finetune.py "
             "--dataset datasets/votre_fichier.csv --output_dir models/test"

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Tests unitaires pour le script de validation des datasets TradePulse
-==================================================================
+===================================================================
 
 Usage:
     python scripts/test_validation.py
@@ -29,7 +29,11 @@ import pytest
 # Ajouter le dossier scripts au path pour importer validate_dataset
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from validate_dataset import DatasetValidator, ValidationError, numpy_json_encoder
+from validate_dataset import (
+    DatasetValidator,
+    ValidationError,
+    numpy_json_encoder,
+)
 
 
 class TestDatasetValidator:
@@ -60,8 +64,8 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == True
-            assert report["validation_success"] == True
+            assert success is True
+            assert report["validation_success"] is True
             assert report["error_count"] == 0
             assert len(report["errors"]) == 0
             assert report["statistics"]["total_samples"] == 6
@@ -86,7 +90,7 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == False
+            assert success is False
             assert report["error_count"] > 0
 
             # Vérifier qu'on a bien une erreur de colonnes manquantes
@@ -109,7 +113,7 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == False
+            assert success is False
             assert report["error_count"] > 0
 
             # Vérifier les erreurs de labels invalides
@@ -121,9 +125,7 @@ class TestDatasetValidator:
             assert len(invalid_label_errors) == 3  # bad, good, unknown
 
             # Vérifier les numéros de ligne
-            line_numbers = [
-                error["line_number"] for error in invalid_label_errors
-            ]
+            line_numbers = [error["line_number"] for error in invalid_label_errors]
             assert 3 in line_numbers  # "bad" à la ligne 3
             assert 4 in line_numbers  # "good" à la ligne 4
             assert 6 in line_numbers  # "unknown" à la ligne 6
@@ -144,7 +146,7 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == False
+            assert success is False
             assert report["error_count"] > 0
 
             # Vérifier les types d'erreurs de texte
@@ -223,7 +225,7 @@ class TestDatasetValidator:
             success, report = self.validator.validate(csv_path)
 
             # Devrait réussir mais avec des warnings
-            assert success == True  # Pas d'erreurs critiques
+            assert success is True  # Pas d'erreurs critiques
             assert report["warning_count"] > 0
 
             # Vérifier les warnings de distribution
@@ -265,7 +267,7 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == False
+            assert success is False
 
             # Vérifier les numéros de ligne spécifiques
             errors = report["errors"]
@@ -292,7 +294,7 @@ class TestDatasetValidator:
         fake_path = Path("nonexistent_file.csv")
         success, report = self.validator.validate(fake_path)
 
-        assert success == False
+        assert success is False
         assert report["error_count"] > 0
 
         error_types = [error["type"] for error in report["errors"]]
@@ -306,7 +308,7 @@ class TestDatasetValidator:
         try:
             success, report = self.validator.validate(csv_path)
 
-            assert success == False
+            assert success is False
             assert report["error_count"] > 0
 
             error_types = [error["type"] for error in report["errors"]]
@@ -327,7 +329,7 @@ class TestDatasetValidator:
 
         try:
             success, report = self.validator.validate(csv_path)
-            assert success == False
+            assert success is False
 
             # Sauvegarder les erreurs
             self.validator.save_errors_for_pr(temp_error_file)
@@ -367,7 +369,10 @@ class TestDatasetValidator:
             csv_path.unlink()
 
     def test_numpy_json_serialization_fix(self):
-        """Test spécifique pour la sérialisation des types numpy (fix du bug)"""
+        """Test spécifique pour la sérialisation des types numpy.
+        
+        Fix du bug de sérialisation.
+        """
         content = """text,label
 "Apple stock rose",positive
 "Market declined",negative

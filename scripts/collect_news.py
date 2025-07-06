@@ -50,60 +50,129 @@ class NewsCollector:
         """Génère des échantillons placeholder pour tests"""
 
         positive_samples = [
-            "Apple Inc. reported record quarterly earnings beating analyst "
-            "expectations with strong iPhone sales and robust services revenue growth.",
-            "Tesla stock surged after announcing breakthrough in battery technology "
-            "that could extend vehicle range by 40% while reducing costs.",
-            "Microsoft Azure cloud services revenue grew 35% year-over-year driven "
-            "by increased enterprise digital transformation investments.",
-            "Amazon Web Services announced expansion into three new regions "
-            "boosting global infrastructure and attracting major enterprise clients.",
-            "NVIDIA shares rallied on strong AI chip demand with data center revenue "
-            "jumping 200% as artificial intelligence adoption accelerates.",
-            "JPMorgan Chase reported better-than-expected quarterly results with "
-            "net interest income growing 25% due to rising interest rates.",
-            "Berkshire Hathaway increased its cash position to record levels while "
-            "Warren Buffett identified several attractive investment opportunities.",
-            "Bank of America raised price targets for renewable energy stocks citing "
-            "accelerating green transition and supportive policy environment.",
+            (
+                "Apple Inc. reported record quarterly earnings beating analyst "
+                "expectations with strong iPhone sales and robust services "
+                "revenue growth."
+            ),
+            (
+                "Tesla stock surged after announcing breakthrough in battery "
+                "technology that could extend vehicle range by 40% while "
+                "reducing costs."
+            ),
+            (
+                "Microsoft Azure cloud services revenue grew 35% year-over-year "
+                "driven by increased enterprise digital transformation "
+                "investments."
+            ),
+            (
+                "Amazon Web Services announced expansion into three new regions "
+                "boosting global infrastructure and attracting major enterprise "
+                "clients."
+            ),
+            (
+                "NVIDIA shares rallied on strong AI chip demand with data center "
+                "revenue jumping 200% as artificial intelligence adoption "
+                "accelerates."
+            ),
+            (
+                "JPMorgan Chase reported better-than-expected quarterly results "
+                "with net interest income growing 25% due to rising interest "
+                "rates."
+            ),
+            (
+                "Berkshire Hathaway increased its cash position to record levels "
+                "while Warren Buffett identified several attractive investment "
+                "opportunities."
+            ),
+            (
+                "Bank of America raised price targets for renewable energy "
+                "stocks citing accelerating green transition and supportive "
+                "policy environment."
+            ),
         ]
 
         negative_samples = [
-            "Federal Reserve announced unexpected interest rate hike of 75 basis "
-            "points citing persistent inflation concerns and tight labor markets.",
-            "Meta Platforms stock declined following announcement of additional "
-            "workforce reductions affecting 15000 employees across multiple divisions.",
-            "Cryptocurrency markets experienced severe volatility with Bitcoin "
-            "dropping 18% following regulatory crackdowns in major Asian economies.",
-            "Oil prices fell 12% amid concerns about global demand slowdown and "
-            "unexpected inventory build-up in major consuming nations.",
-            "Supply chain disruptions continue to impact automotive production with "
-            "Ford reducing Q4 guidance due to ongoing semiconductor shortages.",
-            "Goldman Sachs downgraded several retail stocks citing concerns over "
-            "consumer spending patterns and rising inventory levels.",
-            "European markets declined sharply following ECB warning about potential "
-            "recession risks and tightening monetary policy stance.",
-            "Netflix subscriber growth slowed significantly missing analyst estimates "
-            "while facing increased competition from streaming rivals.",
+            (
+                "Federal Reserve announced unexpected interest rate hike of 75 "
+                "basis points citing persistent inflation concerns and tight "
+                "labor markets."
+            ),
+            (
+                "Meta Platforms stock declined following announcement of "
+                "additional workforce reductions affecting 15000 employees "
+                "across multiple divisions."
+            ),
+            (
+                "Cryptocurrency markets experienced severe volatility with "
+                "Bitcoin dropping 18% following regulatory crackdowns in major "
+                "Asian economies."
+            ),
+            (
+                "Oil prices fell 12% amid concerns about global demand slowdown "
+                "and unexpected inventory build-up in major consuming nations."
+            ),
+            (
+                "Supply chain disruptions continue to impact automotive "
+                "production with Ford reducing Q4 guidance due to ongoing "
+                "semiconductor shortages."
+            ),
+            (
+                "Goldman Sachs downgraded several retail stocks citing concerns "
+                "over consumer spending patterns and rising inventory levels."
+            ),
+            (
+                "European markets declined sharply following ECB warning about "
+                "potential recession risks and tightening monetary policy "
+                "stance."
+            ),
+            (
+                "Netflix subscriber growth slowed significantly missing analyst "
+                "estimates while facing increased competition from streaming "
+                "rivals."
+            ),
         ]
 
         neutral_samples = [
-            "The S&P 500 index closed unchanged at 4150 points with mixed sector "
-            "performance as investors awaited key economic data releases.",
-            "European Central Bank maintained benchmark interest rate at 4.0% in "
-            "line with market expectations during monthly policy meeting.",
-            "Oil prices traded sideways around $75 per barrel following OPEC+ "
-            "production announcement and mixed economic signals from major economies.",
-            "Berkshire Hathaway's quarterly filing revealed minimal changes to "
-            "portfolio holdings with cash position remaining near record levels.",
-            "Federal Reserve officials indicated data-dependent approach to future "
-            "policy decisions while monitoring inflation and employment trends carefully.",
-            "Treasury yields remained stable ahead of upcoming inflation data release "
-            "with investors positioning for potential market volatility.",
-            "Currency markets showed limited movement with dollar index hovering "
-            "near recent ranges against major trading partners.",
-            "Commodity prices displayed mixed performance with agricultural products "
-            "gaining while industrial metals remained under pressure.",
+            (
+                "The S&P 500 index closed unchanged at 4150 points with mixed "
+                "sector performance as investors awaited key economic data "
+                "releases."
+            ),
+            (
+                "European Central Bank maintained benchmark interest rate at "
+                "4.0% in line with market expectations during monthly policy "
+                "meeting."
+            ),
+            (
+                "Oil prices traded sideways around $75 per barrel following "
+                "OPEC+ production announcement and mixed economic signals from "
+                "major economies."
+            ),
+            (
+                "Berkshire Hathaway's quarterly filing revealed minimal "
+                "changes to portfolio holdings with cash position remaining "
+                "near record levels."
+            ),
+            (
+                "Federal Reserve officials indicated data-dependent approach "
+                "to future policy decisions while monitoring inflation and "
+                "employment trends carefully."
+            ),
+            (
+                "Treasury yields remained stable ahead of upcoming inflation "
+                "data release with investors positioning for potential market "
+                "volatility."
+            ),
+            (
+                "Currency markets showed limited movement with dollar index "
+                "hovering near recent ranges against major trading partners."
+            ),
+            (
+                "Commodity prices displayed mixed performance with agricultural "
+                "products gaining while industrial metals remained under "
+                "pressure."
+            ),
         ]
 
         # Sélectionner un échantillon équilibré
@@ -142,7 +211,10 @@ class NewsCollector:
             ]
         )
         labeled_samples.extend(
-            [(text, "neutral") for text in selected_samples[2 * samples_per_class :]]
+            [
+                (text, "neutral")
+                for text in selected_samples[2 * samples_per_class :]
+            ]
         )
 
         # Mélanger l'ordre
@@ -156,7 +228,8 @@ class NewsCollector:
             import feedparser
         except ImportError:
             logger.warning(
-                "feedparser non installé, utilisation des échantillons placeholder"
+                "feedparser non installé, utilisation des échantillons "
+                "placeholder"
             )
             return self.get_placeholder_samples(count)
 
@@ -213,7 +286,8 @@ class NewsCollector:
 
         if not api_key:
             logger.warning(
-                "Clé NewsAPI non trouvée, utilisation des échantillons placeholder"
+                "Clé NewsAPI non trouvée, utilisation des échantillons "
+                "placeholder"
             )
             return self.get_placeholder_samples(count)
 
@@ -221,7 +295,8 @@ class NewsCollector:
             import requests
         except ImportError:
             logger.warning(
-                "requests non installé, utilisation des échantillons placeholder"
+                "requests non installé, utilisation des échantillons "
+                "placeholder"
             )
             return self.get_placeholder_samples(count)
 
@@ -247,7 +322,9 @@ class NewsCollector:
                 description = article.get("description", "")
 
                 # Combiner titre et description
-                text = f"{title}. {description}".strip() if description else title
+                text = (
+                    f"{title}. {description}".strip() if description else title
+                )
 
                 if len(text) > 50:  # Filtrer les textes trop courts
                     label = self._simple_sentiment_analysis(text)
@@ -322,7 +399,9 @@ class NewsCollector:
             return "neutral"
 
     def save_dataset(
-        self, samples: List[Tuple[str, str]], output_file: Optional[Path] = None
+        self,
+        samples: List[Tuple[str, str]],
+        output_file: Optional[Path] = None,
     ) -> Path:
         """Sauvegarde le dataset au format CSV"""
         if output_file is None:
@@ -335,7 +414,8 @@ class NewsCollector:
             writer.writerows(samples)
 
         logger.info(
-            f"✅ Dataset sauvegardé: {output_file} ({len(samples)} échantillons)"
+            f"✅ Dataset sauvegardé: {output_file} ({len(samples)} "
+            "échantillons)"
         )
         return output_file
 
@@ -347,7 +427,9 @@ class NewsCollector:
         **kwargs,
     ) -> Path:
         """Collecte les news et sauvegarde le dataset"""
-        logger.info(f"🔄 Collecte de {count} échantillons depuis source: {source}")
+        logger.info(
+            f"🔄 Collecte de {count} échantillons depuis source: {source}"
+        )
 
         if source == "placeholder":
             samples = self.get_placeholder_samples(count)
@@ -371,7 +453,8 @@ class NewsCollector:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Collecte automatique d'actualités financières pour TradePulse"
+        description="Collecte automatique d'actualités financières pour "
+        "TradePulse"
     )
     parser.add_argument(
         "--source",
@@ -425,13 +508,16 @@ def main():
 
         # Suggestion pour la suite
         print("\n🚀 Prochaines étapes:")
-        print(f"  1. Valider: python scripts/validate_dataset.py {output_file}")
+        print(
+            f"  1. Valider: python scripts/validate_dataset.py {output_file}"
+        )
         print(
             f"  2. Commit: git add {output_file} && "
             "git commit -m 'Add daily dataset'"
         )
         print(
-            "  3. Push: git push (déclenche validation + fine-tuning automatique)"
+            "  3. Push: git push (déclenche validation + fine-tuning "
+            "automatique)"
         )
 
     except Exception as e:

@@ -170,7 +170,9 @@ class DatasetValidator:
             extra = actual_cols - expected_cols
 
             if missing:
-                self.add_error("missing_columns", f"Colonnes manquantes: {missing}")
+                self.add_error(
+                    "missing_columns", f"Colonnes manquantes: {missing}"
+                )
             if extra:
                 self.add_warning(
                     "extra_columns", f"Colonnes supplémentaires: {extra}"
@@ -202,10 +204,14 @@ class DatasetValidator:
             if not pd.isnull(text_value):
                 text_str = str(text_value).strip()
                 if text_str == "" or text_str.lower() == "nan":
-                    self.add_error("empty_text", f"Texte vide", line_num, "text")
+                    self.add_error(
+                        "empty_text", f"Texte vide", line_num, "text"
+                    )
             else:
                 # Vraiment null/NaN
-                self.add_error("missing_text", f"Texte manquant", line_num, "text")
+                self.add_error(
+                    "missing_text", f"Texte manquant", line_num, "text"
+                )
 
             # Vérification des labels
             label_value = row.get("label")
@@ -243,7 +249,9 @@ class DatasetValidator:
             return
 
         # Filtrer les labels valides pour les stats
-        valid_labels = df[df["label"].astype(str).str.match(RE_LABEL, na=False)]
+        valid_labels = df[
+            df["label"].astype(str).str.match(RE_LABEL, na=False)
+        ]
         if valid_labels.empty:
             self.add_error("no_valid_labels", "Aucun label valide trouvé")
             return
@@ -296,13 +304,16 @@ class DatasetValidator:
             if len(text) > self.max_length:
                 self.add_warning(
                     "text_too_long",
-                    f"Texte trop long ({len(text)} > {self.max_length} caractères)",
+                    f"Texte trop long ({len(text)} > {self.max_length} "
+                    "caractères)",
                     line_num,
                     "text",
                 )
 
             # Caractères suspects (non-texte)
-            if re.search(r"[^\w\s\.\,\!\?\"\'\-\(\)\:\;\%\$\+\=\&\@\#]", text):
+            if re.search(
+                r"[^\w\s\.\,\!\?\"\'\-\(\)\:\;\%\$\+\=\&\@\#]", text
+            ):
                 self.add_warning(
                     "suspicious_characters",
                     f"Caractères spéciaux détectés",
@@ -320,7 +331,7 @@ class DatasetValidator:
                 )
 
     def _generate_report(self, df: pd.DataFrame = None) -> Dict:
-        """Génère un rapport de validation détaillé avec conversion des types numpy"""
+        """Génère un rapport de validation détaillé avec conversion numpy"""
         report = {
             "validation_success": len(self.errors) == 0,
             "errors": [error.to_dict() for error in self.errors],
@@ -414,7 +425,8 @@ class DatasetValidator:
             print(f"  Échantillons valides: {stats['valid_samples']}")
             if stats["valid_samples"] > 0:
                 print(
-                    f"  Longueur moyenne: {stats['avg_text_length']:.1f} caractères"
+                    f"  Longueur moyenne: {stats['avg_text_length']:.1f} "
+                    "caractères"
                 )
                 print(
                     f"  Longueur min/max: {stats['min_text_length']}/"
@@ -436,7 +448,9 @@ class DatasetValidator:
         print(f"\n{status}")
         print("=" * 60)
 
-    def save_errors_for_pr(self, output_file: Path = Path("validation_errors.txt")):
+    def save_errors_for_pr(
+        self, output_file: Path = Path("validation_errors.txt")
+    ):
         """Sauve les erreurs dans un format pour commentaire PR"""
         if not self.errors and not self.warnings:
             return
@@ -458,7 +472,9 @@ class DatasetValidator:
             lines.append("")
             for warning in self.warnings:
                 line_info = (
-                    f" (ligne {warning.line_number})" if warning.line_number else ""
+                    f" (ligne {warning.line_number})"
+                    if warning.line_number
+                    else ""
                 )
                 lines.append(f"• {warning.message}{line_info}")
             lines.append("")
@@ -479,7 +495,8 @@ def main():
         else:
             print("❌ Aucun news_*.csv trouvé")
             print(
-                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans "
+                "datasets/"
             )
             return
 
@@ -505,10 +522,14 @@ def main():
         help="Nombre minimum d'échantillons requis (défaut: 10)",
     )
     parser.add_argument(
-        "--quiet", action="store_true", help="Mode silencieux (seulement exit code)"
+        "--quiet",
+        action="store_true",
+        help="Mode silencieux (seulement exit code)",
     )
     parser.add_argument(
-        "--output-json", type=Path, help="Sauvegarder le rapport au format JSON"
+        "--output-json",
+        type=Path,
+        help="Sauvegarder le rapport au format JSON",
     )
     parser.add_argument(
         "--save-pr-errors",
@@ -526,7 +547,8 @@ def main():
         else:
             print("❌ Aucun dataset trouvé")
             print(
-                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans "
+                "datasets/"
             )
             sys.exit(1)
     elif args.dataset_path is None:
