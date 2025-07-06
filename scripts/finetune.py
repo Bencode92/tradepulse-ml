@@ -27,9 +27,9 @@ import argparse
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -41,15 +41,15 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
     EarlyStoppingCallback,
+    EvalPrediction,
     Trainer,
     TrainingArguments,
-    EvalPrediction,
     set_seed,
 )
 
 # Auto-sélection helper
 try:
-    from utils import latest_dataset, get_date_from_filename
+    from utils import get_date_from_filename, latest_dataset
 
     AUTOSEL = True
 except ImportError:
