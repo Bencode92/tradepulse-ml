@@ -105,6 +105,13 @@
     </div>
 
     <script>
+      // Table de couleurs pour les labels
+      const labelColors = {
+        positive: 'text-green-400',
+        neutral:  'text-gray-400',
+        negative: 'text-red-400'
+      };
+
       const qs = id => document.getElementById(id);
       const fileInput = qs('fileInput');
       const addRowBtn = qs('addRowBtn');
@@ -209,47 +216,91 @@
         statsPanel.classList.remove('hidden');
       }
 
-      // ----------------- Rendu du tableau amélioré -----------------
+      // ----------------- Rendu du tableau amélioré avec dropdown coloré -----------------
       function renderTable() {
         if (!headers.length) return;
-        
-        let html = '<table class="min-w-full divide-y divide-white/20 text-sm">';
-        html += '<thead class="bg-white/10"><tr>' + 
-                headers.map(h => `<th class="px-4 py-3 text-left font-medium uppercase text-gray-200">${h}</th>`).join('') + 
-                '<th class="px-4 py-3 text-left font-medium uppercase text-gray-200">Actions</th></tr></thead>';
-        html += '<tbody class="divide-y divide-white/10">';
-        
+
+        let html = `
+          <table class="min-w-full divide-y divide-white/20 text-sm">
+            <thead class="bg-white/10">
+              <tr>
+                ${headers.map(h =>
+                  `<th class="px-4 py-3 text-left font-medium uppercase text-gray-200">${h}</th>`
+                ).join('')}
+                <th class="px-4 py-3 text-left font-medium uppercase text-gray-200">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-white/10">
+        `;
+
         rows.forEach((row, rIdx) => {
-          const isValidLabel = ['positive', 'negative', 'neutral'].includes(row.label?.toLowerCase());
-          const labelClass = isValidLabel ? 'text-green-300' : 'text-red-300';
-          
           html += `<tr class="hover:bg-white/5 transition-colors">`;
+
           headers.forEach(h => {
-            const cellClass = h === 'label' ? labelClass : 'text-gray-200';
-            html += `<td contenteditable="true" data-row="${rIdx}" data-col="${h}" 
-                         class="px-4 py-3 whitespace-pre-wrap focus:outline-none focus:bg-white/10 ${cellClass} rounded transition-colors">
-                         ${row[h] ?? ''}
-                     </td>`;
+            if (h === 'label') {
+              const val = (row.label || 'neutral').toLowerCase();
+              const color = labelColors[val] || 'text-gray-400';
+
+              html += `
+                <td class="px-4 py-3 ${color}">
+                  <select data-row="${rIdx}"
+                          class="bg-transparent outline-none ${color}">
+                    <option value="positive" ${val==='positive'?'selected':''}
+                            style="color:#4ade80">positive</option>
+                    <option value="neutral"  ${val==='neutral'?'selected':''}
+                            style="color:#9ca3af">neutral</option>
+                    <option value="negative" ${val==='negative'?'selected':''}
+                            style="color:#f87171">negative</option>
+                  </select>
+                </td>`;
+            } else {
+              html += `
+                <td contenteditable="true"
+                    data-row="${rIdx}" data-col="${h}"
+                    class="px-4 py-3 whitespace-pre-wrap focus:outline-none focus:bg-white/10 text-gray-200 rounded transition-colors">
+                    ${row[h] ?? ''}
+                </td>`;
+            }
           });
-          html += `<td class="px-4 py-3">
-                     <button onclick="deleteRow(${rIdx})" class="text-red-400 hover:text-red-300 transition-colors">🗑️</button>
-                   </td>`;
-          html += '</tr>';
+
+          html += `
+            <td class="px-4 py-3">
+              <button onclick="deleteRow(${rIdx})"
+                      class="text-red-400 hover:text-red-300 transition-colors">🗑️</button>
+            </td>
+          </tr>`;
         });
-        
-        html += '</tbody></table>';
+
+        html += `</tbody></table>`;
         tableWrapper.innerHTML = html;
-        
-        // Event listeners sur cellules
+
+        /* --- listeners --- */
         tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
-          cell.addEventListener('input', e => {
+          cell.addEventListener('input', () => {
             const r = +cell.dataset.row, c = cell.dataset.col;
             rows[r][c] = cell.innerText.trim();
             updateStats();
-            statusSpan.textContent = `Ligne ${r + 1} modifiée...`;
+            statusSpan.textContent = `Ligne ${r + 1} modifiée…`;
           });
         });
-        
+
+        tableWrapper.querySelectorAll('select[data-row]').forEach(sel => {
+          sel.addEventListener('change', () => {
+            const r = +sel.dataset.row;
+            rows[r].label = sel.value;
+
+            /* maj couleur cellule + select */
+            const td = sel.parentElement;
+            td.classList.remove(...Object.values(labelColors));
+            sel.classList.remove(...Object.values(labelColors));
+            td.classList.add(labelColors[sel.value]);
+            sel.classList.add(labelColors[sel.value]);
+
+            updateStats();
+            statusSpan.textContent = `Ligne ${r + 1} : label ➜ ${sel.value}`;
+          });
+        });
+
         updateStats();
       }
 
