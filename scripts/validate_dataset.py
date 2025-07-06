@@ -210,7 +210,9 @@ class DatasetValidator:
             # Vérification des labels
             label_value = row.get("label")
             if pd.isnull(label_value):
-                self.add_error("missing_label", f"Label manquant", line_num, "label")
+                self.add_error(
+                    "missing_label", f"Label manquant", line_num, "label"
+                )
             else:
                 label_str = str(label_value).strip()
                 if not RE_LABEL.match(label_str):
@@ -357,7 +359,10 @@ class DatasetValidator:
                 else 0,
                 "label_distribution": {
                     str(k): int(v)
-                    for k, v in valid_labels["label"].value_counts().to_dict().items()
+                    for k, v in valid_labels["label"]
+                    .value_counts()
+                    .to_dict()
+                    .items()
                 }
                 if not valid_labels.empty
                 else {},
@@ -408,7 +413,9 @@ class DatasetValidator:
             print(f"  Total échantillons: {stats['total_samples']}")
             print(f"  Échantillons valides: {stats['valid_samples']}")
             if stats["valid_samples"] > 0:
-                print(f"  Longueur moyenne: {stats['avg_text_length']:.1f} caractères")
+                print(
+                    f"  Longueur moyenne: {stats['avg_text_length']:.1f} caractères"
+                )
                 print(
                     f"  Longueur min/max: {stats['min_text_length']}/"
                     f"{stats['max_text_length']}"
@@ -471,7 +478,9 @@ def main():
             sys.argv.append(str(ds))
         else:
             print("❌ Aucun news_*.csv trouvé")
-            print("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            print(
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+            )
             return
 
     parser = argparse.ArgumentParser(
@@ -516,7 +525,9 @@ def main():
             print(f"🕵️  Auto-sélection : {args.dataset_path}")
         else:
             print("❌ Aucun dataset trouvé")
-            print("💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/")
+            print(
+                "💡 Ajoutez des fichiers au format news_YYYYMMDD.csv dans datasets/"
+            )
             sys.exit(1)
     elif args.dataset_path is None:
         print("❌ Aucun dataset spécifié et auto-sélection non disponible")
