@@ -19,15 +19,16 @@ Vérifications:
 - Qualité du contenu
 """
 
-import sys
-import pandas as pd
-import re
 import argparse
 import json
-from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Any
 import logging
+import re
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 import numpy as np
+import pandas as pd
 
 # Auto-sélection helper
 try:
@@ -186,7 +187,7 @@ class DatasetValidator:
             )
 
     def _check_content_detailed(self, df: pd.DataFrame):
-        """Vérifie le contenu avec détails ligne par ligne"""
+        """Vérifie le contenu avec détails ligne par ligne - CORRIGÉ"""
         if "text" not in df.columns or "label" not in df.columns:
             return  # Déjà signalé dans _check_structure
 
@@ -194,21 +195,32 @@ class DatasetValidator:
         for idx, row in df.iterrows():
             line_num = idx + 2  # +1 pour 0-index, +1 pour header
 
-            if pd.isnull(row.get("text")):
-                self.add_error("missing_text", f"Texte manquant", line_num, "text")
-            elif str(row["text"]).strip() == "":
-                self.add_error("empty_text", f"Texte vide", line_num, "text")
+            # CORRECTION : Logique améliorée pour empty vs missing
+            text_value = row.get("text")
 
-            if pd.isnull(row.get("label")):
+            # Ordre important : vérifier d'abord si vide, puis si null
+            if not pd.isnull(text_value):
+                text_str = str(text_value).strip()
+                if text_str == "" or text_str.lower() == "nan":
+                    self.add_error("empty_text", f"Texte vide", line_num, "text")
+            else:
+                # Vraiment null/NaN
+                self.add_error("missing_text", f"Texte manquant", line_num, "text")
+
+            # Vérification des labels
+            label_value = row.get("label")
+            if pd.isnull(label_value):
                 self.add_error("missing_label", f"Label manquant", line_num, "label")
-            elif not RE_LABEL.match(str(row["label"])):
-                self.add_error(
-                    "invalid_label",
-                    f"Label invalide: '{row['label']}' "
-                    f"(doit être positive/negative/neutral)",
-                    line_num,
-                    "label",
-                )
+            else:
+                label_str = str(label_value).strip()
+                if not RE_LABEL.match(label_str):
+                    self.add_error(
+                        "invalid_label",
+                        f"Label invalide: '{label_value}' "
+                        f"(doit être positive/negative/neutral)",
+                        line_num,
+                        "label",
+                    )
 
         # Détection des doublons avec numéros de ligne
         if "text" in df.columns:
@@ -369,7 +381,7 @@ class DatasetValidator:
 
         # Erreurs détaillées
         if report["errors"]:
-            print(f"\n❌ ERREURS CRITIQUES ({len(report['errors'])}):") 
+            print(f"\n❌ ERREURS CRITIQUES ({len(report['errors'])}):")
             for error in report["errors"]:
                 line_info = (
                     f" (ligne {error['line_number']})"
