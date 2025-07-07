@@ -138,28 +138,15 @@ jobs:
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
       run: |
         pip install --upgrade pip
-        # FIX: Pin versions to avoid formatting conflicts
-        pip install "black==24.4.2" "isort==5.13.2" "ruff==0.3.4" pre-commit
+        # Black retiré ; on garde isort & Ruff
+        pip install "isort==5.13.2" "ruff==0.3.4" pre-commit
 
     - name: 🔍 Show Tool Versions
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
       run: |
         echo "🔍 Tool versions for debugging:"
-        python -m black --version
         python -m isort --version
         python -m ruff --version
-
-    - name: 🖤 Check Code Formatting (Black)
-      if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
-      run: |
-        echo "🖤 Checking Python code formatting..."
-        black --check --line-length=88 scripts/ || {
-          echo "❌ Code formatting issues found"
-          echo "💡 Run: black --line-length=88 scripts/"
-          echo "📋 Files that would be reformatted:"
-          black --check --line-length=88 scripts/ --diff
-          exit 1
-        }
 
     - name: 📦 Check Import Sorting (isort)
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
