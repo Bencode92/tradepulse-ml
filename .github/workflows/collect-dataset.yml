@@ -11,17 +11,24 @@ on:
       source:
         description: 'Source de données'
         required: true
-        default: 'placeholder'
+        default: 'mixed'
         type: choice
         options:
-          - 'placeholder'
+          - 'mixed'
           - 'rss'
           - 'newsapi'
+          - 'placeholder'
       
       count:
         description: "Nombre d'échantillons à collecter"
         required: true
-        default: '25'
+        default: '40'
+        type: string
+      
+      days:
+        description: 'Fenêtre temporelle en jours'
+        required: true
+        default: '3'
         type: string
       
       force_commit:
@@ -72,7 +79,7 @@ jobs:
         # Dépendances de base
         pip install pandas>=2.0.0
         
-        # Dépendances optionnelles pour collecte RSS/NewsAPI
+        # Dépendances pour collecte avancée (NOUVEAU)
         pip install feedparser requests || echo "Optional dependencies failed, will use placeholder"
         
         echo "✅ Dependencies installed"
@@ -86,12 +93,14 @@ jobs:
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           echo "SOURCE=${{ github.event.inputs.source }}" >> $GITHUB_ENV
           echo "COUNT=${{ github.event.inputs.count }}" >> $GITHUB_ENV
+          echo "DAYS=${{ github.event.inputs.days }}" >> $GITHUB_ENV
           echo "FORCE_COMMIT=${{ github.event.inputs.force_commit }}" >> $GITHUB_ENV
           echo "INCLUDE_TIME=${{ github.event.inputs.include_time }}" >> $GITHUB_ENV
         else
-          # Déclenchement automatique (cron)
-          echo "SOURCE=placeholder" >> $GITHUB_ENV
-          echo "COUNT=25" >> $GITHUB_ENV
+          # Déclenchement automatique (cron) - NOUVEAUX DÉFAUTS OPTIMISÉS
+          echo "SOURCE=mixed" >> $GITHUB_ENV
+          echo "COUNT=40" >> $GITHUB_ENV
+          echo "DAYS=3" >> $GITHUB_ENV
           echo "FORCE_COMMIT=false" >> $GITHUB_ENV
           echo "INCLUDE_TIME=false" >> $GITHUB_ENV
         fi
@@ -114,30 +123,44 @@ jobs:
         echo "  Dataset suffix: $DATASET_SUFFIX"
         echo "  Source: $SOURCE"
         echo "  Count: $COUNT" 
+        echo "  Days: $DAYS"
         echo "  Force commit: $FORCE_COMMIT"
         echo "  Include time: $INCLUDE_TIME"
 
-    - name: 📰 Collect News Dataset
+    - name: 📰 Collect News Dataset (NOUVEAU - Version Avancée)
       id: collect
       env:
         NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
       run: |
         set -euo pipefail
         
-        echo "📰 Collecte des actualités financières..."
-        echo "🔧 Paramètres: Source=$SOURCE, Count=$COUNT"
+        echo "📰 Collecte des actualités financières (Version Avancée)..."
+        echo "🔧 Paramètres: Source=$SOURCE, Count=$COUNT, Days=$DAYS"
         echo "🕐 Timezone: $TZ ($(date))"
         
         # Utiliser le suffixe généré pour le nom de fichier
         DATASET_FILE="datasets/news_${DATASET_SUFFIX}.csv"
         
-        if python scripts/collect_news.py --source "$SOURCE" --count "$COUNT" --output "$DATASET_FILE"; then
+        # NOUVEAU : Appel avec paramètre --days
+        if python scripts/collect_news.py --source "$SOURCE" --count "$COUNT" --days "$DAYS" --output "$DATASET_FILE"; then
           echo "✅ Collecte réussie"
           echo "📁 Fichier cible: $DATASET_FILE"
           
           if [ -f "$DATASET_FILE" ]; then
             SAMPLE_COUNT=$(tail -n +2 "$DATASET_FILE" | wc -l)
             echo "📊 Dataset créé: $DATASET_FILE ($SAMPLE_COUNT échantillons)"
+            
+            # Vérifier si un fichier JSON de métadonnées a été créé
+            JSON_FILE="${DATASET_FILE%.csv}.json"
+            if [ -f "$JSON_FILE" ]; then
+              echo "📁 Métadonnées créées: $JSON_FILE"
+              
+              # Afficher les métadonnées si possible
+              if command -v jq >/dev/null 2>&1; then
+                echo "📊 Métadonnées du dataset:"
+                jq '.' "$JSON_FILE" | head -20
+              fi
+            fi
             
             echo "dataset-created=true" >> $GITHUB_OUTPUT
             echo "dataset-path=$DATASET_FILE" >> $GITHUB_OUTPUT
@@ -148,6 +171,10 @@ jobs:
           fi
         else
           echo "❌ Échec de la collecte"
+          echo "💡 Solutions possibles:"
+          echo "  - Vérifier la connexion internet"
+          echo "  - Tester avec 'placeholder' si RSS/NewsAPI échouent"
+          echo "  - Vérifier la clé NEWSAPI_KEY pour sources newsapi/mixed"
           exit 1
         fi
 
@@ -185,13 +212,13 @@ jobs:
           echo "✅ Validation basique OK"
         fi
 
-    - name: 📊 Dataset Statistics
+    - name: 📊 Dataset Statistics (AMÉLIORÉ)
       if: steps.collect.outputs.dataset-created == 'true'
       run: |
         DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
         
-        echo "📊 Statistiques du dataset:"
-        echo "=========================="
+        echo "📊 Statistiques du dataset (Version Avancée):"
+        echo "============================================="
         
         # Statistiques CSV basiques
         TOTAL_LINES=$(wc -l < "$DATASET_PATH")
@@ -201,6 +228,18 @@ jobs:
         echo "📊 Échantillons: $DATA_LINES"
         echo "💾 Taille: $(du -h "$DATASET_PATH" | cut -f1)"
         echo "🕐 Créé: $(TZ='Europe/Paris' date)"
+        echo "🔧 Source: $SOURCE (fenêtre: $DAYS jours)"
+        
+        # Vérifier le cache de déduplication
+        CACHE_FILE="datasets/.article_cache.json"
+        if [ -f "$CACHE_FILE" ]; then
+          if command -v jq >/dev/null 2>&1; then
+            CACHE_SIZE=$(jq '.articles | length' "$CACHE_FILE" 2>/dev/null || echo "?")
+            echo "🗄️ Cache déduplication: $CACHE_SIZE articles connus"
+          else
+            echo "🗄️ Cache déduplication: présent"
+          fi
+        fi
         
         # Distribution des labels si bc est disponible
         echo ""
@@ -244,19 +283,17 @@ jobs:
           echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
         fi
         
-        # Ajouter les fichiers datasets
+        # Ajouter les fichiers datasets (inclut .json et .article_cache.json)
         echo "🔧 Executing: git add datasets/"
         git add datasets/
         
-        # Diagnostic APRÈS git add (corrected: no --staged option for git status)
+        # Diagnostic APRÈS git add
         echo ""
         echo "🔍 Diagnostic Git APRÈS git add:"
         echo "  Staged files (via git diff):"
         git diff --staged --name-only | head -10 || true
         echo "  Working directory status:"
         git status --porcelain | head -10 || true
-        echo "  Index status (files staged for commit):"
-        git diff --cached --name-only | head -10 || true
         
         # Vérifier s'il y a des changements - logique intelligente
         HAS_CHANGES=false
@@ -267,20 +304,6 @@ jobs:
           git diff --staged --name-only || true
         else
           echo "⚠️ AUCUN changement détecté dans l'index Git"
-          echo "🔍 Cause possible:"
-          echo "  1. Fichier déjà commité précédemment"
-          echo "  2. Fichier bloqué par .gitignore"
-          echo "  3. Problème de permissions"
-          
-          # Test de diagnostic .gitignore (safe with || true)
-          echo ""
-          echo "🕵️ Test .gitignore pour $DATASET_PATH:"
-          if git check-ignore "$DATASET_PATH" 2>/dev/null; then
-            echo "❌ PROBLÈME: Le fichier est ignoré par .gitignore"
-            echo "💡 Solution: Vérifiez les règles dans .gitignore"
-          else
-            echo "✅ Le fichier N'EST PAS ignoré par .gitignore"
-          fi
         fi
         
         # Décider du commit selon la logique
@@ -288,16 +311,18 @@ jobs:
           # Il y a des changements → commit normal
           COMMIT_ACTION="normal"
           
-          # Utiliser here-doc pour le message multiligne
+          # Message amélioré avec infos de la collecte avancée
           COMMIT_MSG=$(cat <<EOF
         📰 Add daily financial news dataset ($TODAY)
 
         📊 Dataset details:
         - File: $DATASET_PATH
         - Samples: $SAMPLE_COUNT
-        - Source: $SOURCE  
+        - Source: $SOURCE (fenêtre: $DAYS jours)
         - Generated: $FULL_TIMESTAMP
+        - Collection: Version avancée avec déduplication
 
+        🚀 Nouveautés: Cache déduplication, sources multiples, fenêtre temporelle
         🤖 Auto-generated by Daily News Collection workflow
         EOF
         )
@@ -306,14 +331,13 @@ jobs:
           # Pas de changements mais commit forcé
           COMMIT_ACTION="forced"
           
-          # Utiliser here-doc pour le message multiligne
           COMMIT_MSG=$(cat <<EOF
         🔄 Forced dataset update ($TODAY)
 
         📊 Dataset details:
         - File: $DATASET_PATH (regenerated)
         - Samples: $SAMPLE_COUNT
-        - Source: $SOURCE
+        - Source: $SOURCE (fenêtre: $DAYS jours)
         - Generated: $FULL_TIMESTAMP
 
         ⚠️ Forced commit with --allow-empty (manual trigger)
@@ -351,7 +375,7 @@ jobs:
         echo "✅ Dataset committed and pushed successfully"
         echo "🔄 This will trigger validation and fine-tuning workflows"
 
-    - name: 📝 Create Summary Comment
+    - name: 📝 Create Summary Comment (AMÉLIORÉ)
       if: always() && github.event_name == 'workflow_dispatch'
       uses: actions/github-script@v7
       with:
@@ -361,6 +385,7 @@ jobs:
           const datasetPath = '${{ steps.collect.outputs.dataset-path }}';
           const sampleCount = '${{ steps.collect.outputs.sample-count }}';
           const source = '${{ env.SOURCE }}';
+          const days = '${{ env.DAYS }}';
           const datasetSuffix = '${{ env.DATASET_SUFFIX }}';
           const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
           
@@ -369,15 +394,23 @@ jobs:
           if (status === 'success' && datasetCreated) {
             emoji = '✅';
             statusText = 'SUCCESS';
-            message = `🎉 Dataset créé avec succès !
+            message = `🎉 Dataset créé avec succès (Version Avancée) !
             
             **📊 Détails du dataset:**
             - 📄 Fichier: \`${datasetPath}\`
             - 📊 Échantillons: ${sampleCount}
             - 🔗 Source: ${source}
+            - 📅 Fenêtre temporelle: ${days} jours
             - 📅 Suffixe: ${datasetSuffix}
             - 🕐 Timezone: Europe/Paris
             - 🚀 Timestamp: ${new Date().toISOString()}
+            
+            **🔥 Nouvelles fonctionnalités:**
+            - ✅ Cache de déduplication automatique
+            - ✅ 12 sources RSS au lieu de 4
+            - ✅ Pagination NewsAPI intelligente
+            - ✅ Mode mixte optimisé (70% RSS + 30% NewsAPI)
+            - ✅ Métadonnées enrichies
             
             **🔄 Prochaines étapes:**
             Le dataset a été committé et va déclencher automatiquement :
@@ -395,25 +428,26 @@ jobs:
             
             **🔧 Actions suggérées:**
             1. Vérifier les logs du workflow
-            2. Tester la collecte localement
+            2. Tester la collecte localement: \`./run_advanced_daily.sh mixed 30 3\`
             3. Vérifier les dépendances (feedparser, requests)
-            4. Vérifier les règles .gitignore`;
+            4. Tester avec placeholder: \`python scripts/collect_news.py --source placeholder\`
+            5. Vérifier les règles .gitignore`;
           }
           
-          const commentBody = `## ${emoji} Daily News Collection - ${statusText}
+          const commentBody = `## ${emoji} Daily News Collection (Version Avancée) - ${statusText}
           
           ${message}
           
           ### 🔗 Liens utiles
           - 📊 [Workflow complet](${runUrl})
-          - 🔧 Script: \`scripts/collect_news.py\`
+          - 🔧 Script: \`scripts/collect_news.py\` (Version Avancée)
           - 📖 [Guide des datasets](DATASET_WORKFLOW.md)
+          - 🚀 Script express: \`./run_advanced_daily.sh\`
           
           ---
-          *🤖 Rapport automatique de collecte quotidienne*
+          *🤖 Rapport automatique de collecte quotidienne - Version Avancée avec déduplication*
           `;
           
-          // Pour les déclenchements manuels, créer une issue ou commentaire
           console.log('Workflow summary:', commentBody);
 
   # Job optionnel pour notifier en cas d'échec
@@ -430,35 +464,40 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          // Créer une issue pour signaler l'échec de collecte automatique
           const issueBody = `# 🚨 Échec de la collecte quotidienne de dataset
-          
+
           La collecte automatique de dataset du ${new Date().toISOString().split('T')[0]} a échoué.
-          
+
           ## 📊 Détails
-          - **Workflow:** Daily News Dataset Collection
+          - **Workflow:** Daily News Dataset Collection (Version Avancée)
           - **Trigger:** Scheduled (cron)
           - **Timestamp:** ${new Date().toISOString()}
           - **Run ID:** ${context.runId}
-          
+
           ## 🔗 Liens
           - [Workflow failed](${context.payload.repository.html_url}/actions/runs/${context.runId})
           - [Script de collecte](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
-          
+
           ## 🔧 Actions suggérées
           1. Vérifier les logs du workflow
-          2. Tester la collecte manuellement
+          2. Tester la collecte manuellement: \`./run_advanced_daily.sh mixed 40 3\`
           3. Vérifier la disponibilité des sources RSS/API
-          4. Lancer une collecte manuelle si nécessaire
-          
+          4. Tester avec placeholder: \`python scripts/collect_news.py --source placeholder\`
+          5. Lancer une collecte manuelle si nécessaire
+
           ## 💡 Collecte manuelle
           Vous pouvez lancer une collecte manuelle via :
           **Actions → Daily News Dataset Collection → Run workflow**
-          
+
+          Nouvelles options disponibles :
+          - **Source:** mixed (recommandé), rss, newsapi, placeholder
+          - **Count:** 40 (défaut optimisé)
+          - **Days:** 3 (fenêtre temporelle en jours)
+
           ---
           *Issue créée automatiquement par le système de monitoring*
           `;
-          
+
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
