@@ -144,31 +144,12 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # CORRECTION FINALE: Lecture optimale pour distinguer "" vs cellules vides
+            # CORRECTION SIMPLE ET DÉFINITIVE
             df = pd.read_csv(
                 csv_path,
-                keep_default_na=False,  # "" reste chaîne vide
-                na_filter=False         # Empêche conversion automatique en NaN
+                keep_default_na=False,  # "" reste chaîne vide  
+                na_filter=True          # garde la détection NaN pour cellules vides
             )
-            
-            # Traitement post-lecture : identifier les vraies cellules vides
-            # Les cellules complètement vides deviennent des chaînes vides ""
-            # On les convertit en NaN pour les distinguer des "" explicites
-            
-            # Sauvegarde de l'état original pour distinction
-            original_empty_mask = (df == "")
-            
-            # Lecture alternative pour identifier les vraies cellules vides
-            df_with_na = pd.read_csv(csv_path, keep_default_na=True)
-            true_na_mask = df_with_na.isnull()
-            
-            # Appliquer la distinction :
-            # - Cellules vraiment vides (dans CSV) → NaN
-            # - Chaînes vides explicites "" → restent ""
-            for col in df.columns:
-                if col in df_with_na.columns:
-                    df.loc[true_na_mask[col], col] = np.nan
-
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
             return False, self._generate_report()
@@ -213,7 +194,7 @@ class DatasetValidator:
             )
 
     def _check_content_detailed(self, df: pd.DataFrame):
-        """Vérifie le contenu avec détails ligne par ligne - LOGIQUE CORRIGÉE"""
+        """Vérifie le contenu avec détails ligne par ligne - LOGIQUE SIMPLIFIÉE"""
         if "text" not in df.columns or "label" not in df.columns:
             return  # Déjà signalé dans _check_structure
 
@@ -221,19 +202,16 @@ class DatasetValidator:
         for idx, row in df.iterrows():
             real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
 
-            # CORRECTION FINALE : Logique précise pour empty vs missing
+            # CORRECTION SIMPLE : Logique claire pour empty vs missing
             text_value = row.get("text")
 
             if pd.isnull(text_value):
-                # Vraiment null/NaN (cellule vide dans le CSV)
+                # Cellule vraiment vide → missing_text
                 self.add_error(
                     "missing_text", f"Texte manquant", real_line, "text"
                 )
             elif isinstance(text_value, str) and text_value.strip() == "":
-                # Chaîne vide explicite "" ou espaces
-                self.add_error("empty_text", f"Texte vide", real_line, "text")
-            elif str(text_value).lower() == "nan":
-                # Cas edge : chaîne "nan" 
+                # Chaîne vide explicite "" ou espaces → empty_text
                 self.add_error("empty_text", f"Texte vide", real_line, "text")
 
             # Vérification des labels
