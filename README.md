@@ -8,17 +8,16 @@ Si votre CI échoue sur le formatage du code :
 
 ```bash
 # Solution automatique (RECOMMANDÉ)
-chmod +x fix-ci.sh && ./fix-ci.sh
+chmod +x apply-isort-setup.sh && ./apply-isort-setup.sh
 
-# Solution manuelle 
-python -m pip install black isort ruff
-black --line-length 88 scripts/
+# Solution manuelle isort + ruff uniquement
+pip install --upgrade 'isort==5.13.2' 'ruff==0.3.4'
 isort --profile black scripts/
 ruff check scripts/ --fix
 git add scripts/ && git commit -m "style: format code (CI fix)" && git push
 ```
 
-📖 **Guide complet** : [CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)
+📖 **Guides complets** : [DEVELOPER_SETUP.md](DEVELOPER_SETUP.md) + [CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)
 
 ## 🚀 Utilisation rapide
 
@@ -71,16 +70,17 @@ python scripts/finetune.py --dataset datasets/news_20250706.csv --output_dir mod
 
 ```
 tradepulse-ml/
-├── 🛠️ fix-ci.sh                     # NOUVEAU ! Correction express CI
-├── 🔧 setup-dev.sh                  # NOUVEAU ! Setup environnement dev
-├── 📖 CI_FIX_GUIDE.md               # NOUVEAU ! Guide correction CI
+├── 🛠️ apply-isort-setup.sh          # NOUVEAU ! Setup automation isort + pre-commit
+├── 🔧 setup-dev.sh                  # Setup environnement dev
+├── 📖 DEVELOPER_SETUP.md            # NOUVEAU ! Guide développeur isort + pre-commit
+├── 📖 CI_FIX_GUIDE.md               # Guide correction CI
 ├── 🌐 news_editor.html              # Éditeur web moderne
-├── 📁 .vscode/settings.json         # NOUVEAU ! Config VSCode optimisée
+├── 📁 .vscode/settings.json         # Config VSCode optimisée
 ├── 📁 .github/workflows/            # GitHub Actions
 │   ├── finetune-model.yml           # Workflow de fine-tuning (amélioré)
 │   ├── dataset-quality-gate.yml     # Validation des datasets
 │   ├── collect-dataset.yml          # Collecte automatique
-│   └── tests.yml                    # Tests automatisés
+│   └── tests.yml                    # Tests automatisés (sans Black)
 ├── 📁 datasets/                     # Datasets d'entraînement
 │   ├── news_20250705.csv            # Exemple dataset (15 échantillons)
 │   ├── financial_news_20250706.csv  # Dataset test (20 échantillons)
@@ -93,12 +93,12 @@ tradepulse-ml/
 │   ├── validate_dataset.py          # Validation datasets (+ auto-sélection)
 │   ├── utils.py                     # Utilitaires d'auto-sélection
 │   ├── auto-pipeline.sh             # Pipeline express
-│   ├── format-check.sh              # NOUVEAU ! Vérification formatage
+│   ├── format-check.sh              # Vérification formatage
 │   ├── collect_news.py              # Collecte d'actualités
 │   └── test_validation.py           # Tests de validation
 ├── 📁 config/                       # Configuration
 ├── 📁 notebooks/                    # Jupyter notebooks
-├── .pre-commit-config.yaml          # AMÉLIORÉ ! Config pre-commit synchronisée
+├── .pre-commit-config.yaml          # NOUVEAU ! Config isort + ruff (sans Black)
 ├── requirements.txt                 # Dépendances Python de base
 ├── requirements-ml.txt              # Dépendances ML complètes
 ├── DATASET_WORKFLOW.md             # Guide validation
@@ -107,23 +107,24 @@ tradepulse-ml/
 └── README.md                       # Ce fichier
 ```
 
-## 🔧 Outils de Développement (NOUVEAU !)
+## 🔧 Outils de Développement (MISE À JOUR !)
 
-### 🛠️ Correction CI Express
+### 🛠️ Setup Express avec isort + pre-commit
 
 ```bash
 # Option 1: Script automatique (RECOMMANDÉ)
-./fix-ci.sh                         # Corrige tout automatiquement
+./apply-isort-setup.sh              # Configure tout automatiquement
 
-# Option 2: Vérification manuelle
-./scripts/format-check.sh           # Vérifie le formatage
-./scripts/format-check.sh --fix     # Corrige automatiquement
+# Option 2: Setup manuel
+pip install --upgrade 'isort==5.13.2' 'ruff==0.3.4' pre-commit
+isort --profile black scripts/
+pre-commit install
 
-# Option 3: Setup environnement complet
+# Option 3: Setup environnement complet (si disponible)
 ./setup-dev.sh                      # Configure pre-commit + IDE
 ```
 
-### 🎣 Pre-commit automatique
+### 🎣 Pre-commit automatique (sans Black !)
 
 ```bash
 # Installation (une seule fois)
@@ -132,15 +133,18 @@ pre-commit install
 
 # Usage automatique
 git commit                          # Les hooks s'exécutent automatiquement !
+# ↳ isort reformate les imports
+# ↳ ruff corrige les problèmes de linting
+# ↳ Plus de problèmes de formatage Black !
 ```
 
 ### 💻 Configuration IDE
 
 Le projet inclut une configuration VSCode optimisée (`.vscode/settings.json`) :
-- ✅ Black avec line-length 88 (identique CI)
-- ✅ isort avec profil Black  
-- ✅ Ruff pour le linting
-- ✅ Formatage automatique à la sauvegarde
+- ✅ ~~Black supprimé~~ 🚫
+- ✅ **isort avec profil Black** (imports organisés)
+- ✅ **Ruff pour le linting** 
+- ✅ **Formatage automatique** à la sauvegarde
 
 ## 🎨 Éditeur web moderne
 
@@ -445,17 +449,19 @@ python scripts/finetune.py --output_dir models/finbert-auto
 
 ## 🚨 Dépannage
 
-### 🛠️ Problèmes CI (NOUVEAU !)
+### 🛠️ Problèmes CI (MISE À JOUR !)
 
 ```bash
 # CI échoue sur formatage ? Solution express :
-./fix-ci.sh
+./apply-isort-setup.sh              # Setup automatique isort + pre-commit
+
+# Correction manuelle isort/ruff uniquement :
+isort --profile black scripts/
+ruff check scripts/ --fix
+git add scripts/ && git commit -m "style: fix formatting" && git push
 
 # Vérification locale avant commit :
-./scripts/format-check.sh
-
-# Setup environnement complet :
-./setup-dev.sh
+./scripts/format-check.sh            # (si disponible)
 ```
 
 ### Auto-sélection
@@ -502,7 +508,8 @@ pip install -r requirements.txt
 
 ## 📚 Documentation détaillée
 
-- **[CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)** : **NOUVEAU !** Guide correction CI express
+- **[DEVELOPER_SETUP.md](DEVELOPER_SETUP.md)** : **NOUVEAU !** Guide setup développeur avec isort + pre-commit
+- **[CI_FIX_GUIDE.md](CI_FIX_GUIDE.md)** : Guide correction CI express
 - **[DATASET_WORKFLOW.md](DATASET_WORKFLOW.md)** : Guide complet du workflow de validation
 - **[ENTERPRISE_UPGRADE.md](ENTERPRISE_UPGRADE.md)** : Guide de mise à niveau entreprise
 - **[BUG_FIXES_AND_FEATURES.md](BUG_FIXES_AND_FEATURES.md)** : Changelog complet
@@ -523,12 +530,13 @@ Le modèle fine-tuné peut être intégré dans le système principal :
 
 ## 🎯 Nouveautés et améliorations
 
-### ✨ Version actuelle
-- **🛠️ Outils de correction CI** : Scripts express pour résoudre les problèmes de formatage
-- **🔧 Environnement de développement** : Setup automatique avec pre-commit et config IDE
+### ✨ Version actuelle (NOUVELLE CONFIGURATION !)
+- **🛠️ Suppression complète de Black** : Plus de conflits de formatage
+- **🔧 Configuration isort pure** : Import organization automatique + pre-commit
+- **📖 Guide développeur** : Setup express avec DEVELOPER_SETUP.md
+- **⚡ Scripts d'automatisation** : apply-isort-setup.sh pour configuration rapide
+- **🎯 CI allégée et stable** : Plus de "formatting failed" 
 - **🌐 Éditeur web moderne** avec interface glassmorphism
-- **⚡ Pipeline express** en une commande
-- **🎯 Auto-sélection intelligente** dans tous les scripts
 - **📊 Validation temps réel** dans l'interface web
 - **🚀 Déclenchement workflows** depuis l'éditeur
 
@@ -545,13 +553,13 @@ Le modèle fine-tuné peut être intégré dans le système principal :
 Pour toute question ou problème :
 - 🐛 **Issues** : Ouvrir une issue dans ce repository
 - 📋 **Logs** : Consulter Actions → Job logs
-- 📖 **Documentation** : CI_FIX_GUIDE.md + DATASET_WORKFLOW.md + ce README
+- 📖 **Documentation** : DEVELOPER_SETUP.md + CI_FIX_GUIDE.md + ce README
 - 🔍 **Validation** : `python scripts/validate_dataset.py --help`
 - ⚡ **Pipeline** : `./scripts/auto-pipeline.sh help`
-- 🛠️ **CI Problems** : `./fix-ci.sh` ou voir CI_FIX_GUIDE.md
+- 🛠️ **Setup Développeur** : `./apply-isort-setup.sh`
 
 ---
 
 **TradePulse ML** - Fine-tuning FinBERT avec interface web moderne et automation complète 🚀✨
 
-*Nouveau : Outils de correction CI + Environnement de développement optimisé !*
+*Nouvelle configuration : isort + pre-commit pour un développement sans friction !*
