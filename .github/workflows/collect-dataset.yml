@@ -150,15 +150,16 @@ jobs:
             SAMPLE_COUNT=$(tail -n +2 "$DATASET_FILE" | wc -l)
             echo "📊 Dataset créé: $DATASET_FILE ($SAMPLE_COUNT échantillons)"
             
-            # Vérifier si un fichier JSON de métadonnées a été créé
+            # Vérifier si un fichier JSON de métadonnées a été créé (mais ne l'afficher que si jq est disponible)
             JSON_FILE="${DATASET_FILE%.csv}.json"
             if [ -f "$JSON_FILE" ]; then
               echo "📁 Métadonnées créées: $JSON_FILE"
               
-              # Afficher les métadonnées si possible
+              # CORRIGÉ: Éviter broken pipe avec jq
               if command -v jq >/dev/null 2>&1; then
-                echo "📊 Métadonnées du dataset:"
-                jq '.' "$JSON_FILE" | head -20
+                echo "📊 Métadonnées du dataset (aperçu):"
+                # Solution 1: Utiliser jq avec limite intégrée
+                jq -r '. | {filename, created_at, article_count, label_distribution, cache_size}' "$JSON_FILE" 2>/dev/null || echo "  (aperçu des métadonnées non disponible)"
               fi
             fi
             
@@ -283,9 +284,14 @@ jobs:
           echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
         fi
         
-        # Ajouter les fichiers datasets (inclut .json et .article_cache.json)
-        echo "🔧 Executing: git add datasets/"
-        git add datasets/
+        # Ajouter seulement le fichier CSV (éviter JSON si non désiré)
+        echo "🔧 Executing: git add $DATASET_PATH"
+        git add "$DATASET_PATH"
+        
+        # Ajouter le cache de déduplication s'il existe
+        if [ -f "datasets/.article_cache.json" ]; then
+          git add datasets/.article_cache.json
+        fi
         
         # Diagnostic APRÈS git add
         echo ""
