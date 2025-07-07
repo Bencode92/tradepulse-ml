@@ -144,10 +144,11 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # FIX: keep_default_na=False pour que "" reste chaîne vide ; cellules vraiment vides ⇒ NaN
+            # FIX: Configuration optimale pour distinguer "" vs cellules vides
             df = pd.read_csv(
                 csv_path,
-                keep_default_na=False   # "" reste chaîne vide ; cellules vraiment vides ⇒ NaN
+                keep_default_na=True,   # Garde le comportement par défaut pour les vraies cellules vides
+                na_values=[]            # Mais ne convertit pas "" en NaN
             )
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
@@ -204,16 +205,15 @@ class DatasetValidator:
             # CORRECTION : Logique améliorée pour empty vs missing
             text_value = row.get("text")
 
-            # Avec keep_default_na=False, "" reste "" et NaN reste NaN
-            if pd.isnull(text_value) or text_value == "":
-                if text_value == "":
-                    # Chaîne vide explicite
-                    self.add_error("empty_text", f"Texte vide", real_line, "text")
-                else:
-                    # Vraiment null/NaN (cellule vide)
-                    self.add_error(
-                        "missing_text", f"Texte manquant", real_line, "text"
-                    )
+            # Avec la nouvelle config : "" reste "", cellules vides deviennent NaN
+            if pd.isnull(text_value):
+                # Vraiment null/NaN (cellule vide)
+                self.add_error(
+                    "missing_text", f"Texte manquant", real_line, "text"
+                )
+            elif text_value == "":
+                # Chaîne vide explicite
+                self.add_error("empty_text", f"Texte vide", real_line, "text")
             else:
                 # Vérifier si c'est juste des espaces
                 text_str = str(text_value).strip()
