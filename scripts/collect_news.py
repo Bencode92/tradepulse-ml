@@ -8,14 +8,14 @@ Collecte automatiquement des actualités financières et génère un dataset
 labellisé pour l'entraînement FinBERT.
 
 Usage:
-    python scripts/collect_news.py
+    python scripts/collect_news.py --source rss
+    python scripts/collect_news.py --source newsapi --newsapi-key YOUR_API_KEY
     python scripts/collect_news.py --source rss --output custom_news.csv
 
 Sources supportées:
-- Placeholder samples (défaut)
-- RSS feeds financiers
+- RSS feeds financiers (recommandé)
 - NewsAPI (si clé API disponible)
-- Yahoo Finance RSS
+- Placeholder samples (tests uniquement)
 
 Output:
     datasets/news_YYYYMMDD.csv avec colonnes text,label
@@ -229,7 +229,7 @@ class NewsCollector:
         except ImportError:
             logger.warning(
                 "feedparser non installé, utilisation des échantillons "
-                "placeholder"
+                "placeholder. Installez avec: pip install feedparser"
             )
             return self.get_placeholder_samples(count)
 
@@ -241,13 +241,21 @@ class NewsCollector:
         ]
 
         all_articles = []
+        today = datetime.datetime.now(PARIS_TZ).date()
 
         for feed_url in rss_feeds:
             try:
                 logger.info(f"Collecte depuis {feed_url}")
                 feed = feedparser.parse(feed_url)
 
-                for entry in feed.entries[:10]:  # Limiter à 10 par feed
+                # CORRECTIF 3: Filtrer les articles publiés aujourd'hui
+                for entry in feed.entries:
+                    pub = entry.get("published_parsed")
+                    if pub:
+                        pub_date = datetime.date(*pub[:3])
+                        if pub_date != today:
+                            continue  # Sauter les articles non publiés aujourd'hui
+                    
                     title = entry.get("title", "")
                     summary = entry.get("summary", "")
 
@@ -255,13 +263,17 @@ class NewsCollector:
                     text = f"{title}. {summary}".strip()
                     if len(text) > 50:  # Filtrer les textes trop courts
                         all_articles.append(text)
+                        
+                    # Limiter pour éviter trop d'articles d'un seul feed
+                    if len(all_articles) >= count * 2:
+                        break
 
             except Exception as e:
                 logger.warning(f"Erreur collecte RSS {feed_url}: {e}")
 
         if not all_articles:
             logger.warning(
-                "Aucun article collecté depuis RSS, "
+                "Aucun article collecté depuis RSS aujourd'hui, "
                 "utilisation des échantillons placeholder"
             )
             return self.get_placeholder_samples(count)
@@ -275,6 +287,7 @@ class NewsCollector:
             label = self._simple_sentiment_analysis(text)
             labeled_samples.append((text, label))
 
+        logger.info(f"✅ Collecté {len(labeled_samples)} articles d'aujourd'hui depuis RSS")
         return labeled_samples
 
     def collect_from_newsapi(
@@ -286,8 +299,8 @@ class NewsCollector:
 
         if not api_key:
             logger.warning(
-                "Clé NewsAPI non trouvée, utilisation des échantillons "
-                "placeholder"
+                "Clé NewsAPI non trouvée (variable NEWSAPI_KEY ou --newsapi-key), "
+                "utilisation des échantillons placeholder"
             )
             return self.get_placeholder_samples(count)
 
@@ -296,16 +309,21 @@ class NewsCollector:
         except ImportError:
             logger.warning(
                 "requests non installé, utilisation des échantillons "
-                "placeholder"
+                "placeholder. Installez avec: pip install requests"
             )
             return self.get_placeholder_samples(count)
 
+        # CORRECTIF 3: Ajouter filtre temporel pour aujourd'hui uniquement
+        today = datetime.datetime.now(PARIS_TZ).date().isoformat()
+        
         url = "https://newsapi.org/v2/everything"
         params = {
             "q": "stock market OR finance OR earnings OR Federal Reserve",
             "language": "en",
             "sortBy": "publishedAt",
             "pageSize": count,
+            "from": today,
+            "to": today,
             "apiKey": api_key,
         }
 
@@ -330,6 +348,7 @@ class NewsCollector:
                     label = self._simple_sentiment_analysis(text)
                     labeled_samples.append((text, label))
 
+            logger.info(f"✅ Collecté {len(labeled_samples)} articles d'aujourd'hui depuis NewsAPI")
             return labeled_samples[:count]
 
         except Exception as e:
@@ -421,7 +440,7 @@ class NewsCollector:
 
     def collect_and_save(
         self,
-        source: str = "placeholder",
+        source: str = "rss",  # CORRECTIF 1: Changer défaut de placeholder à rss
         count: int = 20,
         output_file: Optional[Path] = None,
         **kwargs,
@@ -459,8 +478,8 @@ def main():
     parser.add_argument(
         "--source",
         choices=["placeholder", "rss", "newsapi"],
-        default="placeholder",
-        help="Source de données (défaut: placeholder)",
+        default="rss",  # CORRECTIF 1: Changer défaut de placeholder à rss
+        help="Source de données (défaut: rss)",
     )
     parser.add_argument(
         "--count",
@@ -482,17 +501,19 @@ def main():
         default="datasets",
         help="Répertoire de sortie (défaut: datasets)",
     )
+    # CORRECTIF 2: Rendre le seed optionnel
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Seed pour reproductibilité (défaut: 42)",
+        help="Seed optionnel pour reproductibilité (utile seulement pour les placeholders)",
     )
 
     args = parser.parse_args()
 
-    # Fixer le seed pour reproductibilité
-    random.seed(args.seed)
+    # CORRECTIF 2: Appliquer le seed seulement s'il est fourni
+    if args.seed is not None:
+        random.seed(args.seed)
+        logger.info(f"🎲 Seed fixé à {args.seed} pour reproductibilité")
 
     collector = NewsCollector(args.output_dir)
 
