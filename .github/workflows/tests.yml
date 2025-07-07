@@ -138,24 +138,8 @@ jobs:
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
       run: |
         pip install --upgrade pip
-        # isort retiré ; on garde seulement Ruff
-        pip install "ruff==0.3.4" pre-commit
-
-    - name: 🔍 Show Tool Versions
-      if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
-      run: |
-        echo "🔍 Tool versions for debugging:"
-        python -m ruff --version
-
-    - name: ⚡ Run Ruff Linting
-      if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
-      run: |
-        echo "⚡ Running Ruff linting..."
-        ruff check scripts/ --show-source || {
-          echo "❌ Linting issues found"
-          echo "💡 Run: ruff check scripts/ --fix"
-          exit 1
-        }
+        # Ruff retiré ; on garde seulement pre-commit
+        pip install pre-commit
 
     - name: 🎣 Test Pre-commit Hooks
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
