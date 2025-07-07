@@ -194,13 +194,13 @@ class DatasetValidator:
             )
 
     def _check_content_detailed(self, df: pd.DataFrame):
-        """Vérifie le contenu avec détails ligne par ligne - CORRIGÉ"""
+        """Vérifie le contenu avec détails ligne par ligne - CORRECTION NUMÉROTATION"""
         if "text" not in df.columns or "label" not in df.columns:
             return  # Déjà signalé dans _check_structure
 
         # Vérification des valeurs manquantes ligne par ligne
         for idx, row in df.iterrows():
-            line_num = idx + 2  # +1 pour 0-index, +1 pour header
+            real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
 
             # CORRECTION : Logique améliorée pour empty vs missing
             text_value = row.get("text")
@@ -209,23 +209,23 @@ class DatasetValidator:
             if pd.isnull(text_value) or text_value == "":
                 if text_value == "":
                     # Chaîne vide explicite
-                    self.add_error("empty_text", f"Texte vide", line_num, "text")
+                    self.add_error("empty_text", f"Texte vide", real_line, "text")
                 else:
                     # Vraiment null/NaN (cellule vide)
                     self.add_error(
-                        "missing_text", f"Texte manquant", line_num, "text"
+                        "missing_text", f"Texte manquant", real_line, "text"
                     )
             else:
                 # Vérifier si c'est juste des espaces
                 text_str = str(text_value).strip()
                 if text_str == "" or text_str.lower() == "nan":
-                    self.add_error("empty_text", f"Texte vide", line_num, "text")
+                    self.add_error("empty_text", f"Texte vide", real_line, "text")
 
             # Vérification des labels
             label_value = row.get("label")
             if pd.isnull(label_value) or label_value == "":
                 self.add_error(
-                    "missing_label", f"Label manquant", line_num, "label"
+                    "missing_label", f"Label manquant", real_line, "label"
                 )
             else:
                 label_str = str(label_value).strip()
@@ -234,7 +234,7 @@ class DatasetValidator:
                         "invalid_label",
                         f"Label invalide: '{label_value}' "
                         f"(doit être positive/negative/neutral)",
-                        line_num,
+                        real_line,
                         "label",
                     )
 
@@ -244,7 +244,7 @@ class DatasetValidator:
             if duplicated_mask.any():
                 duplicate_groups = df[duplicated_mask].groupby("text")
                 for text, group in duplicate_groups:
-                    line_numbers = [idx + 2 for idx in group.index]
+                    line_numbers = [idx + 2 for idx in group.index]  # Cohérent : +2
                     self.add_warning(
                         "duplicate_text",
                         f"Texte dupliqué aux lignes {line_numbers}: "
@@ -288,7 +288,7 @@ class DatasetValidator:
                 )
 
     def _check_quality_detailed(self, df: pd.DataFrame):
-        """Vérifie la qualité du contenu avec détails"""
+        """Vérifie la qualité du contenu avec détails - CORRECTION NUMÉROTATION"""
         if "text" not in df.columns:
             return
 
@@ -297,14 +297,14 @@ class DatasetValidator:
                 continue
 
             text = str(row["text"])
-            line_num = idx + 2
+            real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
 
             # Textes très courts
             if len(text.strip()) < 10:
                 self.add_warning(
                     "very_short_text",
                     f"Texte très court ({len(text)} caractères)",
-                    line_num,
+                    real_line,
                     "text",
                 )
 
@@ -314,7 +314,7 @@ class DatasetValidator:
                     "text_too_long",
                     f"Texte trop long ({len(text)} > {self.max_length} "
                     "caractères)",
-                    line_num,
+                    real_line,
                     "text",
                 )
 
@@ -325,7 +325,7 @@ class DatasetValidator:
                 self.add_warning(
                     "suspicious_characters",
                     f"Caractères spéciaux détectés",
-                    line_num,
+                    real_line,
                     "text",
                 )
 
@@ -334,7 +334,7 @@ class DatasetValidator:
                 self.add_warning(
                     "all_caps_text",
                     f"Texte entièrement en majuscules",
-                    line_num,
+                    real_line,
                     "text",
                 )
 
