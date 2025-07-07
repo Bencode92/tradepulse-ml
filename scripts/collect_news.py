@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TradePulse News Collector - Version Avancée avec Déduplication
-==============================================================
+TradePulse News Collector - Version Avancée avec Auto-Labelling ML
+================================================================
 
-Version améliorée qui résout le problème "toujours les mêmes articles" :
+🚀 NOUVEAU : Labelling automatique avec votre modèle ML !
+
+Version améliorée qui résout le problème "toujours les mêmes articles" 
+ET ajoute le labelling automatique :
 - Fenêtre temporelle élargie (1-7 jours)
 - Cache de déduplication automatique
 - Sources RSS multiples avec rotation
 - Pagination NewsAPI intelligente
 - Mode mixte optimisé (70% RSS + 30% NewsAPI)
+- 🤖 NOUVEAU : Labelling ML automatique avec confiance
 
 Usage:
+    # Collecte classique (comme avant)
     python scripts/collect_news.py --source mixed --count 60 --days 3
-    python scripts/collect_news.py --source rss --count 50 --days 5
-    python scripts/collect_news.py --source newsapi --count 40 --days 2 --newsapi-key YOUR_KEY
+    
+    # 🚀 NOUVEAU : Collecte + Labelling automatique
+    python scripts/collect_news.py --source mixed --count 50 --auto-label --ml-model production
+    python scripts/collect_news.py --source rss --count 40 --auto-label --ml-model Bencode92/tradepulse-finbert-prod
+    python scripts/collect_news.py --source mixed --count 30 --auto-label --confidence-threshold 0.8
 
 Nouveautés:
-- --days : Fenêtre temporelle en jours (défaut: 3)
-- --no-cache : Désactiver la déduplication
-- mode 'mixed' : Sources combinées intelligemment
+- --auto-label : Active le labelling ML automatique
+- --ml-model : Modèle à utiliser (production/development/custom)
+- --confidence-threshold : Seuil de confiance (défaut: 0.75)
+- --review-low-confidence : Marque les articles à faible confiance pour révision
 """
 
 import argparse
@@ -43,14 +52,31 @@ logger = logging.getLogger("news-collector-advanced")
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
 
+# 🚀 NOUVEAU : Configuration des modèles ML
+ML_MODELS_CONFIG = {
+    "production": "Bencode92/tradepulse-finbert-prod",      # Modèle stable de production
+    "development": "Bencode92/tradepulse-finbert-dev",      # Modèle de développement
+    "fallback": "yiyanghkust/finbert-tone",                 # FinBERT de base
+}
+
 class AdvancedNewsCollector:
-    def __init__(self, output_dir: str = "datasets", enable_cache: bool = True):
+    def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, auto_label: bool = False, ml_model: str = "fallback", confidence_threshold: float = 0.75):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.enable_cache = enable_cache
         self.cache_file = self.output_dir / ".article_cache.json"
         self.seen_articles: Set[str] = set()
+        
+        # 🚀 NOUVEAU : Configuration ML
+        self.auto_label = auto_label
+        self.ml_model_name = ML_MODELS_CONFIG.get(ml_model, ml_model)  # Résolution des alias
+        self.confidence_threshold = confidence_threshold
+        self.ml_classifier = None
+        
         self._load_cache()
+        
+        if self.auto_label:
+            self._load_ml_model()
 
     def _load_cache(self):
         """Charge le cache de déduplication"""
@@ -78,6 +104,98 @@ class AdvancedNewsCollector:
         except Exception as e:
             logger.warning(f"Erreur sauvegarde cache: {e}")
 
+    # 🚀 NOUVEAU : Chargement du modèle ML
+    def _load_ml_model(self):
+        """Charge le modèle ML pour labelling automatique"""
+        try:
+            from transformers import pipeline
+            import torch
+            
+            logger.info(f"🤖 Chargement du modèle ML: {self.ml_model_name}")
+            
+            # Chargement avec gestion des erreurs
+            self.ml_classifier = pipeline(
+                "text-classification",
+                model=self.ml_model_name,
+                return_all_scores=True,
+                device=0 if torch.cuda.is_available() else -1
+            )
+            
+            logger.info(f"✅ Modèle ML chargé: {self.ml_model_name}")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Échec chargement {self.ml_model_name}: {e}")
+            
+            # Fallback sur FinBERT de base
+            try:
+                fallback_model = ML_MODELS_CONFIG["fallback"]
+                logger.info(f"🔄 Fallback sur: {fallback_model}")
+                
+                from transformers import pipeline
+                import torch
+                
+                self.ml_classifier = pipeline(
+                    "text-classification",
+                    model=fallback_model,
+                    return_all_scores=True,
+                    device=0 if torch.cuda.is_available() else -1
+                )
+                
+                self.ml_model_name = fallback_model
+                logger.info(f"✅ Modèle fallback chargé: {fallback_model}")
+                
+            except Exception as e2:
+                logger.error(f"❌ Impossible de charger le modèle fallback: {e2}")
+                logger.warning("🔄 Utilisation de l'analyse de sentiment basique")
+                self.ml_classifier = None
+
+    # 🚀 NOUVEAU : Prédiction ML avec confiance
+    def _predict_sentiment_ml(self, text: str) -> Tuple[str, float, bool]:
+        """
+        Prédit le sentiment avec le modèle ML
+        Returns: (label, confidence, needs_review)
+        """
+        if not self.ml_classifier:
+            # Fallback sur l'analyse basique
+            label = self._advanced_sentiment_analysis(text)
+            return label, 0.5, True  # Confiance faible = révision recommandée
+        
+        try:
+            # Limiter la longueur du texte
+            text_truncated = text[:512]
+            
+            # Prédiction avec tous les scores
+            results = self.ml_classifier(text_truncated)
+            
+            # Trouver la prédiction avec le score le plus élevé
+            best_pred = max(results[0], key=lambda x: x['score'])
+            
+            # Normalisation des labels (selon le modèle utilisé)
+            label_mapping = {
+                'POSITIVE': 'positive',
+                'NEGATIVE': 'negative', 
+                'NEUTRAL': 'neutral',
+                'positive': 'positive',
+                'negative': 'negative',
+                'neutral': 'neutral',
+                'LABEL_0': 'negative',  # FinBERT mapping
+                'LABEL_1': 'neutral',
+                'LABEL_2': 'positive',
+            }
+            
+            raw_label = best_pred['label']
+            normalized_label = label_mapping.get(raw_label, 'neutral')
+            confidence = best_pred['score']
+            needs_review = confidence < self.confidence_threshold
+            
+            return normalized_label, confidence, needs_review
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Erreur prédiction ML: {e}")
+            # Fallback sur analyse basique
+            label = self._advanced_sentiment_analysis(text)
+            return label, 0.5, True
+
     def _article_hash(self, text: str) -> str:
         """Génère un hash unique pour un article"""
         # Normaliser le texte pour la déduplication
@@ -103,7 +221,7 @@ class AdvancedNewsCollector:
         start_date = end_date - datetime.timedelta(days=days_back)
         return start_date.isoformat(), end_date.isoformat()
 
-    def collect_from_rss_extended(self, count: int = 40, days: int = 3) -> List[Tuple[str, str]]:
+    def collect_from_rss_extended(self, count: int = 40, days: int = 3) -> List[Dict]:
         """Collecte RSS avec sources étendues et fenêtre temporelle"""
         try:
             import feedparser
@@ -166,7 +284,18 @@ class AdvancedNewsCollector:
 
                     # Vérification qualité et déduplication
                     if len(text) > 50 and not self._is_duplicate(text):
-                        all_articles.append(text)
+                        # 🚀 NOUVEAU : Structure enrichie avec métadonnées
+                        article_data = {
+                            "text": text,
+                            "title": title,
+                            "summary": summary,
+                            "source": feed_url,
+                            "url": entry.get("link", ""),
+                            "published_date": pub_date.isoformat() if pub_date else None,
+                            "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+                        }
+                        
+                        all_articles.append(article_data)
                         self._add_to_cache(text)
                         feed_articles += 1
 
@@ -194,12 +323,9 @@ class AdvancedNewsCollector:
 
         # Sélection équilibrée et labellisation
         selected = all_articles[:count]
-        labeled_samples = [(text, self._advanced_sentiment_analysis(text)) for text in selected]
-        
-        logger.info(f"✅ {len(labeled_samples)} articles RSS uniques collectés")
-        return labeled_samples
+        return self._label_articles(selected)
 
-    def collect_from_newsapi_paginated(self, count: int = 30, days: int = 3, api_key: Optional[str] = None) -> List[Tuple[str, str]]:
+    def collect_from_newsapi_paginated(self, count: int = 30, days: int = 3, api_key: Optional[str] = None) -> List[Dict]:
         """NewsAPI avec pagination et fenêtre temporelle"""
         if not api_key:
             api_key = os.getenv("NEWSAPI_KEY")
@@ -257,7 +383,19 @@ class AdvancedNewsCollector:
                         text = f"{title}. {description}".strip() if description else title
 
                         if len(text) > 50 and not self._is_duplicate(text):
-                            all_articles.append(text)
+                            # 🚀 NOUVEAU : Structure enrichie avec métadonnées NewsAPI
+                            article_data = {
+                                "text": text,
+                                "title": title,
+                                "summary": description,
+                                "source": "newsapi.org",
+                                "url": article.get("url", ""),
+                                "published_date": article.get("publishedAt"),
+                                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat(),
+                                "newsapi_source": article.get("source", {}).get("name", "Unknown")
+                            }
+                            
+                            all_articles.append(article_data)
                             self._add_to_cache(text)
 
                         # Arrêter si on a assez
@@ -276,37 +414,89 @@ class AdvancedNewsCollector:
 
         # Labellisation
         selected = all_articles[:count]
-        labeled_samples = [(text, self._advanced_sentiment_analysis(text)) for text in selected]
-        
-        logger.info(f"✅ {len(labeled_samples)} articles NewsAPI uniques collectés")
-        return labeled_samples
+        return self._label_articles(selected)
 
-    def collect_mixed_sources(self, count: int = 50, days: int = 3, api_key: Optional[str] = None) -> List[Tuple[str, str]]:
+    def collect_mixed_sources(self, count: int = 50, days: int = 3, api_key: Optional[str] = None) -> List[Dict]:
         """Mode mixte optimisé: 70% RSS + 30% NewsAPI"""
         rss_count = int(count * 0.7)  # 70% RSS
         newsapi_count = count - rss_count  # 30% NewsAPI
 
         logger.info(f"🔄 Mode mixte: {rss_count} RSS + {newsapi_count} NewsAPI")
 
-        all_samples = []
+        all_articles = []
         
         # Collecte RSS (prioritaire pour diversité)
-        rss_samples = self.collect_from_rss_extended(rss_count, days)
-        all_samples.extend(rss_samples)
+        rss_articles = self.collect_from_rss_extended(rss_count, days)
+        all_articles.extend(rss_articles)
 
         # Collecte NewsAPI (complément)
         if newsapi_count > 0:
-            newsapi_samples = self.collect_from_newsapi_paginated(newsapi_count, days, api_key)
-            all_samples.extend(newsapi_samples)
+            newsapi_articles = self.collect_from_newsapi_paginated(newsapi_count, days, api_key)
+            all_articles.extend(newsapi_articles)
 
         # Mélanger pour diversité
-        random.shuffle(all_samples)
+        random.shuffle(all_articles)
         
-        logger.info(f"✅ Mode mixte: {len(all_samples)} articles uniques collectés")
-        return all_samples[:count]
+        logger.info(f"✅ Mode mixte: {len(all_articles)} articles uniques collectés")
+        return all_articles[:count]
+
+    # 🚀 NOUVEAU : Labellisation des articles (ML ou basique)
+    def _label_articles(self, articles: List[Dict]) -> List[Dict]:
+        """Labellise une liste d'articles avec ML ou analyse basique"""
+        labeled_articles = []
+        stats = {"positive": 0, "negative": 0, "neutral": 0, "needs_review": 0}
+        
+        logger.info(f"🤖 Labellisation de {len(articles)} articles...")
+        if self.auto_label and self.ml_classifier:
+            logger.info(f"   Modèle: {self.ml_model_name}")
+            logger.info(f"   Seuil confiance: {self.confidence_threshold}")
+        
+        for i, article in enumerate(articles):
+            text = article["text"]
+            
+            if self.auto_label:
+                # Prédiction ML avec confiance
+                label, confidence, needs_review = self._predict_sentiment_ml(text)
+                
+                # Ajouter les métadonnées ML
+                article.update({
+                    "label": label,
+                    "ml_confidence": confidence,
+                    "needs_review": needs_review,
+                    "ml_model_used": self.ml_model_name,
+                    "labeling_method": "ml_auto"
+                })
+                
+                if needs_review:
+                    stats["needs_review"] += 1
+            else:
+                # Analyse de sentiment basique
+                label = self._advanced_sentiment_analysis(text)
+                article.update({
+                    "label": label,
+                    "ml_confidence": None,
+                    "needs_review": False,
+                    "ml_model_used": None,
+                    "labeling_method": "rule_based"
+                })
+            
+            stats[label] += 1
+            labeled_articles.append(article)
+            
+            # Log de progression
+            if (i + 1) % 10 == 0:
+                logger.info(f"   📊 Progression: {i + 1}/{len(articles)} labellisés")
+        
+        logger.info(f"✅ Labellisation terminée:")
+        logger.info(f"   📊 Distribution: {stats}")
+        
+        if self.auto_label and stats["needs_review"] > 0:
+            logger.info(f"   ⚠️ Articles à réviser (confiance < {self.confidence_threshold}): {stats['needs_review']}")
+        
+        return labeled_articles
 
     def _advanced_sentiment_analysis(self, text: str) -> str:
-        """Analyse de sentiment pondérée et nuancée"""
+        """Analyse de sentiment pondérée et nuancée (méthode existante conservée)"""
         text_lower = text.lower()
 
         # Mots-clés avec poids (impact plus réaliste)
@@ -339,110 +529,171 @@ class AdvancedNewsCollector:
         else:
             return "neutral"
 
-    def get_placeholder_samples(self, count: int = 20) -> List[Tuple[str, str]]:
-        """Échantillons placeholder pour tests (conservé de l'original)"""
-        positive_samples = [
-            ("Apple Inc. reported record quarterly earnings beating analyst expectations with strong iPhone sales and robust services revenue growth.", "positive"),
-            ("Tesla stock surged after announcing breakthrough in battery technology that could extend vehicle range by 40% while reducing costs.", "positive"),
-            ("Microsoft Azure cloud services revenue grew 35% year-over-year driven by increased enterprise digital transformation investments.", "positive"),
-            ("Amazon Web Services announced expansion into three new regions boosting global infrastructure and attracting major enterprise clients.", "positive"),
-            ("NVIDIA shares rallied on strong AI chip demand with data center revenue jumping 200% as artificial intelligence adoption accelerates.", "positive"),
+    def get_placeholder_samples(self, count: int = 20) -> List[Dict]:
+        """Échantillons placeholder pour tests (conservé de l'original mais adapté)"""
+        placeholder_data = [
+            {
+                "text": "Apple Inc. reported record quarterly earnings beating analyst expectations with strong iPhone sales and robust services revenue growth.",
+                "title": "Apple Reports Record Earnings",
+                "summary": "Strong quarterly performance beats expectations",
+                "source": "placeholder",
+                "url": "https://example.com/apple-earnings",
+                "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
+                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+            },
+            {
+                "text": "Federal Reserve announced unexpected interest rate hike of 75 basis points citing persistent inflation concerns and tight labor markets.",
+                "title": "Fed Raises Interest Rates",
+                "summary": "Unexpected 75bp hike amid inflation concerns",
+                "source": "placeholder",
+                "url": "https://example.com/fed-rate-hike",
+                "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
+                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+            },
+            {
+                "text": "The S&P 500 index closed unchanged at 4150 points with mixed sector performance as investors awaited key economic data releases.",
+                "title": "S&P 500 Unchanged",
+                "summary": "Mixed sector performance awaiting data",
+                "source": "placeholder",
+                "url": "https://example.com/sp500-flat",
+                "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
+                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+            }
         ]
         
-        negative_samples = [
-            ("Federal Reserve announced unexpected interest rate hike of 75 basis points citing persistent inflation concerns and tight labor markets.", "negative"),
-            ("Meta Platforms stock declined following announcement of additional workforce reductions affecting 15000 employees across multiple divisions.", "negative"),
-            ("Cryptocurrency markets experienced severe volatility with Bitcoin dropping 18% following regulatory crackdowns in major Asian economies.", "negative"),
-            ("Oil prices fell 12% amid concerns about global demand slowdown and unexpected inventory build-up in major consuming nations.", "negative"),
-        ]
+        # Compléter avec des échantillons générés si nécessaire
+        while len(placeholder_data) < count:
+            # Dupliquer et varier les échantillons existants
+            base = placeholder_data[len(placeholder_data) % len(placeholder_data)]
+            new_sample = base.copy()
+            new_sample["text"] = f"Sample {len(placeholder_data)}: " + base["text"]
+            new_sample["title"] = f"Sample {len(placeholder_data)}: " + base["title"]
+            placeholder_data.append(new_sample)
         
-        neutral_samples = [
-            ("The S&P 500 index closed unchanged at 4150 points with mixed sector performance as investors awaited key economic data releases.", "neutral"),
-            ("European Central Bank maintained benchmark interest rate at 4.0% in line with market expectations during monthly policy meeting.", "neutral"),
-            ("Oil prices traded sideways around $75 per barrel following OPEC+ production announcement and mixed economic signals from major economies.", "neutral"),
-            ("Treasury yields remained stable ahead of upcoming inflation data release with investors positioning for potential market volatility.", "neutral"),
-        ]
+        selected = placeholder_data[:count]
+        return self._label_articles(selected)
 
-        # Distribution équilibrée
-        samples_per_class = count // 3
-        remaining = count % 3
-
-        selected = []
-        selected.extend(positive_samples[:samples_per_class])
-        selected.extend(negative_samples[:samples_per_class])
-        selected.extend(neutral_samples[:samples_per_class + remaining])
-
-        random.shuffle(selected)
-        return selected[:count]
-
-    def save_dataset_with_metadata(self, samples: List[Tuple[str, str]], output_file: Optional[Path] = None, metadata: Dict = None) -> Path:
+    def save_dataset_with_metadata(self, articles: List[Dict], output_file: Optional[Path] = None, metadata: Dict = None) -> Path:
         """Sauvegarde avec métadonnées enrichies"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
 
-        # Sauvegarde CSV
+        # 🚀 NOUVEAU : Sauvegarde CSV avec colonnes optionnelles selon l'usage
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["text", "label"])
-            writer.writerows(samples)
+            
+            # Colonnes de base (toujours présentes)
+            base_columns = ["text", "label"]
+            
+            # Colonnes étendues pour debug/analyse (optionnelles)
+            if any(article.get("ml_confidence") is not None for article in articles):
+                # Mode ML activé, sauver plus de métadonnées dans CSV
+                extended_columns = ["text", "label", "confidence", "needs_review", "source", "title"]
+                writer.writerow(extended_columns)
+                
+                for article in articles:
+                    row = [
+                        article["text"],
+                        article["label"],
+                        article.get("ml_confidence", ""),
+                        article.get("needs_review", ""),
+                        article.get("source", ""),
+                        article.get("title", "")
+                    ]
+                    writer.writerow(row)
+            else:
+                # Mode basique, CSV minimal
+                writer.writerow(base_columns)
+                for article in articles:
+                    writer.writerow([article["text"], article["label"]])
 
-        # Sauvegarde métadonnées JSON
+        # Sauvegarde métadonnées JSON complètes
         if metadata:
             json_file = output_file.with_suffix('.json')
+            
+            # 🚀 NOUVEAU : Métadonnées enrichies avec infos ML
+            enhanced_metadata = metadata.copy()
+            enhanced_metadata.update({
+                "auto_labeling_enabled": self.auto_label,
+                "ml_model_used": self.ml_model_name if self.auto_label else None,
+                "confidence_threshold": self.confidence_threshold if self.auto_label else None,
+                "articles_metadata": articles  # Données complètes pour debug
+            })
+            
             with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
+                json.dump(enhanced_metadata, f, indent=2, ensure_ascii=False)
             logger.info(f"📁 Métadonnées: {json_file}")
 
         # Sauvegarde cache
         self._save_cache()
 
-        logger.info(f"✅ Dataset: {output_file} ({len(samples)} échantillons)")
+        logger.info(f"✅ Dataset: {output_file} ({len(articles)} échantillons)")
         return output_file
 
     def collect_and_save(self, source: str = "mixed", count: int = 40, days: int = 3, output_file: Optional[Path] = None, **kwargs) -> Path:
         """Collecte avancée avec déduplication et métadonnées"""
         logger.info(f"🔄 Collecte avancée: {source}, {count} articles, {days} jours")
+        
+        if self.auto_label:
+            logger.info(f"🤖 Labelling automatique activé (modèle: {self.ml_model_name})")
 
         if source == "placeholder":
-            samples = self.get_placeholder_samples(count)
+            articles = self.get_placeholder_samples(count)
         elif source == "rss":
-            samples = self.collect_from_rss_extended(count, days)
+            articles = self.collect_from_rss_extended(count, days)
         elif source == "newsapi":
-            samples = self.collect_from_newsapi_paginated(count, days, kwargs.get("api_key"))
+            articles = self.collect_from_newsapi_paginated(count, days, kwargs.get("api_key"))
         elif source == "mixed":
-            samples = self.collect_mixed_sources(count, days, kwargs.get("api_key"))
+            articles = self.collect_mixed_sources(count, days, kwargs.get("api_key"))
         else:
             raise ValueError(f"Source non supportée: {source}")
 
-        if not samples:
+        if not articles:
             raise RuntimeError("Aucun échantillon collecté")
 
         # Statistiques
-        labels = [label for _, label in samples]
+        labels = [article["label"] for article in articles]
         label_counts = {label: labels.count(label) for label in set(labels)}
+        
+        # 🚀 NOUVEAU : Statistiques ML
+        needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
+        high_confidence_count = len(articles) - needs_review_count
         
         # Métadonnées enrichies
         metadata = {
             "filename": output_file.name if output_file else f"news_{datetime.datetime.now(PARIS_TZ).strftime('%Y%m%d')}.csv",
             "created_at": datetime.datetime.now(PARIS_TZ).isoformat(),
             "source": source,
-            "article_count": len(samples),
+            "article_count": len(articles),
             "days_range": days,
             "label_distribution": label_counts,
             "deduplication_enabled": self.enable_cache,
-            "cache_size": len(self.seen_articles) if self.enable_cache else 0
+            "cache_size": len(self.seen_articles) if self.enable_cache else 0,
+            # 🚀 NOUVEAU : Métadonnées ML
+            "auto_labeling_enabled": self.auto_label,
+            "ml_model_used": self.ml_model_name if self.auto_label else None,
+            "confidence_threshold": self.confidence_threshold if self.auto_label else None,
+            "high_confidence_articles": high_confidence_count,
+            "needs_review_articles": needs_review_count
         }
 
         logger.info(f"📊 Distribution: {label_counts}")
         if self.enable_cache:
             logger.info(f"🗄️ Cache: {len(self.seen_articles)} articles connus (doublons évités)")
+        
+        if self.auto_label:
+            logger.info(f"🎯 Articles haute confiance: {high_confidence_count}/{len(articles)}")
+            if needs_review_count > 0:
+                logger.info(f"⚠️ Articles à réviser: {needs_review_count}")
 
-        return self.save_dataset_with_metadata(samples, output_file, metadata)
+        return self.save_dataset_with_metadata(articles, output_file, metadata)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="TradePulse News Collector - Version Avancée")
+    parser = argparse.ArgumentParser(description="TradePulse News Collector - Version Avancée avec Auto-Labelling ML")
+    
+    # Arguments existants (conservés)
     parser.add_argument("--source", choices=["placeholder", "rss", "newsapi", "mixed"], default="mixed", help="Source (défaut: mixed)")
     parser.add_argument("--count", type=int, default=40, help="Nombre d'articles (défaut: 40)")
     parser.add_argument("--days", type=int, default=3, help="Fenêtre temporelle en jours (défaut: 3)")
@@ -451,6 +702,16 @@ def main():
     parser.add_argument("--output-dir", default="datasets", help="Répertoire de sortie")
     parser.add_argument("--no-cache", action="store_true", help="Désactiver déduplication")
     parser.add_argument("--seed", type=int, help="Seed pour reproductibilité")
+    
+    # 🚀 NOUVEAUX arguments pour ML
+    parser.add_argument("--auto-label", action="store_true", help="Activer le labelling ML automatique")
+    parser.add_argument("--ml-model", choices=["production", "development", "fallback"], default="fallback",
+                       help="Modèle ML à utiliser (défaut: fallback)")
+    parser.add_argument("--custom-model", type=str, help="Modèle personnalisé (format HuggingFace)")
+    parser.add_argument("--confidence-threshold", type=float, default=0.75, 
+                       help="Seuil de confiance pour ML (défaut: 0.75)")
+    parser.add_argument("--review-low-confidence", action="store_true",
+                       help="Marquer les articles à faible confiance pour révision")
 
     args = parser.parse_args()
 
@@ -458,7 +719,16 @@ def main():
         random.seed(args.seed)
         logger.info(f"🎲 Seed: {args.seed}")
 
-    collector = AdvancedNewsCollector(args.output_dir, enable_cache=not args.no_cache)
+    # Résolution du modèle ML
+    ml_model = args.custom_model if args.custom_model else args.ml_model
+    
+    collector = AdvancedNewsCollector(
+        output_dir=args.output_dir, 
+        enable_cache=not args.no_cache,
+        auto_label=args.auto_label,
+        ml_model=ml_model,
+        confidence_threshold=args.confidence_threshold
+    )
 
     try:
         output_file = collector.collect_and_save(
@@ -471,9 +741,18 @@ def main():
 
         print(f"✅ Dataset généré: {output_file}")
         print(f"🔄 Déduplication: {'activée' if not args.no_cache else 'désactivée'}")
+        
+        if args.auto_label:
+            print(f"🤖 Labelling ML: {ml_model} (seuil: {args.confidence_threshold})")
+        
         print("\n🚀 Prochaines étapes:")
-        print(f"  1. Valider: python scripts/validate_dataset.py")
-        print(f"  2. Pipeline: ./scripts/auto-pipeline.sh pipeline")
+        if args.auto_label:
+            print(f"  1. Vérifier: open news_editor.html (réviser les articles marqués)")
+            print(f"  2. Valider: python scripts/validate_dataset.py")
+            print(f"  3. Pipeline: python scripts/finetune.py --incremental --dataset {output_file}")
+        else:
+            print(f"  1. Valider: python scripts/validate_dataset.py")
+            print(f"  2. Pipeline: python unified_pipeline.py")
 
     except Exception as e:
         logger.error(f"❌ Erreur: {e}")
