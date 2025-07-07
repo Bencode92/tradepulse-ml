@@ -141,6 +141,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         lfs: true
+        fetch-depth: 2      # ← FIX: garantit que HEAD~1 existe
         token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 🐍 Setup Python 3.9
@@ -153,6 +154,18 @@ jobs:
       id: dataset-selection
       run: |
         set -euo pipefail
+        
+        # -----------------------------------------------------------------
+        # FIX 1: Initialiser TOUTES les variables avant utilisation 
+        #        pour rester compatible avec `set -u` (nounset)
+        # -----------------------------------------------------------------
+        MODEL_NAME=""
+        DATASET=""
+        EPOCHS="3"
+        LEARNING_RATE="2e-5"
+        PUSH_TO_HUB="false"
+        UNIQUE_MODEL_NAME=""
+        TIMESTAMP=""
         
         echo "🎯 Selecting dataset for training..."
         echo "Trigger reason: ${{ needs.check-prerequisites.outputs.trigger-reason }}"
@@ -168,17 +181,17 @@ jobs:
               echo "❌ No CSV files found in datasets/"
               exit 1
             fi
-            echo "DATASET=$LATEST_CSV" >> $GITHUB_ENV
+            DATASET="$LATEST_CSV"
             echo "📊 Auto-selected dataset: $LATEST_CSV"
           else
-            echo "DATASET=$MANUAL_DATASET" >> $GITHUB_ENV
+            DATASET="$MANUAL_DATASET"
             echo "📊 Manual dataset: $MANUAL_DATASET"
           fi
           
-          echo "MODEL_NAME=${{ github.event.inputs.model_name }}" >> $GITHUB_ENV
-          echo "EPOCHS=${{ github.event.inputs.epochs }}" >> $GITHUB_ENV
-          echo "LEARNING_RATE=${{ github.event.inputs.learning_rate }}" >> $GITHUB_ENV
-          echo "PUSH_TO_HUB=${{ github.event.inputs.push_to_hub }}" >> $GITHUB_ENV
+          MODEL_NAME="${{ github.event.inputs.model_name }}"
+          EPOCHS="${{ github.event.inputs.epochs }}"
+          LEARNING_RATE="${{ github.event.inputs.learning_rate }}"
+          PUSH_TO_HUB="${{ github.event.inputs.push_to_hub }}"
         else
           # Déclenchement automatique après push ou Quality Gate
           echo "🔄 Auto-trigger mode: selecting latest dataset..."
@@ -207,20 +220,32 @@ jobs:
             exit 1
           fi
           
-          echo "DATASET=$DATASET_FILE" >> $GITHUB_ENV
-          echo "MODEL_NAME=yiyanghkust/finbert-tone" >> $GITHUB_ENV
-          echo "EPOCHS=3" >> $GITHUB_ENV
-          echo "LEARNING_RATE=2e-5" >> $GITHUB_ENV
-          echo "PUSH_TO_HUB=false" >> $GITHUB_ENV
+          DATASET="$DATASET_FILE"
+          MODEL_NAME="yiyanghkust/finbert-tone"
+          EPOCHS="3"
+          LEARNING_RATE="2e-5"
+          PUSH_TO_HUB="false"
         fi
         
-        # Générer un nom de modèle unique avec timestamp
+        # -----------------------------------------------------------------
+        # FIX 2: Calculer le nom unique APRÈS avoir défini MODEL_NAME
+        # -----------------------------------------------------------------
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         MODEL_NAME_CLEAN=$(echo "$MODEL_NAME" | sed 's/[^a-zA-Z0-9]/-/g')
         UNIQUE_MODEL_NAME="finbert-${MODEL_NAME_CLEAN}-${TIMESTAMP}"
         
-        echo "UNIQUE_MODEL_NAME=$UNIQUE_MODEL_NAME" >> $GITHUB_ENV
-        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+        # -----------------------------------------------------------------
+        # 3. Exporter pour les étapes suivantes
+        # -----------------------------------------------------------------
+        {
+          echo "MODEL_NAME=$MODEL_NAME"
+          echo "DATASET=$DATASET"
+          echo "EPOCHS=$EPOCHS"
+          echo "LEARNING_RATE=$LEARNING_RATE"
+          echo "PUSH_TO_HUB=$PUSH_TO_HUB"
+          echo "UNIQUE_MODEL_NAME=$UNIQUE_MODEL_NAME"
+          echo "TIMESTAMP=$TIMESTAMP"
+        } >> "$GITHUB_ENV"
         
         echo ""
         echo "🔧 Final configuration:"
@@ -428,6 +453,9 @@ jobs:
       if: always()
       run: |
         set -euo pipefail
+        
+        # FIX 3: Test défensif pour UNIQUE_MODEL_NAME au cas où l'étape précédente échoue
+        : "${UNIQUE_MODEL_NAME:=unknown}"
         
         echo "📊 Enhanced Training Summary"
         echo "============================"
