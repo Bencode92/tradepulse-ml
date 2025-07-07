@@ -155,10 +155,11 @@ jobs:
             if [ -f "$JSON_FILE" ]; then
               echo "📁 Métadonnées créées: $JSON_FILE"
               
-              # Afficher les métadonnées si possible
+              # Afficher les métadonnées si possible (FIX: éviter broken pipe)
               if command -v jq >/dev/null 2>&1; then
                 echo "📊 Métadonnées du dataset:"
-                jq '.' "$JSON_FILE" | head -20
+                # FIX: Utiliser --compact-output et éviter le pipe vers head
+                jq --compact-output '. | {filename, created_at, article_count, label_distribution, cache_size}' "$JSON_FILE" 2>/dev/null || echo "Métadonnées disponibles dans $JSON_FILE"
               fi
             fi
             
@@ -230,11 +231,19 @@ jobs:
         echo "🕐 Créé: $(TZ='Europe/Paris' date)"
         echo "🔧 Source: $SOURCE (fenêtre: $DAYS jours)"
         
-        # Vérifier le cache de déduplication
+        # Vérifier le cache de déduplication (FIX: plus robuste)
         CACHE_FILE="datasets/.article_cache.json"
         if [ -f "$CACHE_FILE" ]; then
-          if command -v jq >/dev/null 2>&1; then
-            CACHE_SIZE=$(jq '.articles | length' "$CACHE_FILE" 2>/dev/null || echo "?")
+          if command -v python3 >/dev/null 2>&1; then
+            CACHE_SIZE=$(python3 -c "
+import json
+try:
+    with open('$CACHE_FILE', 'r') as f:
+        data = json.load(f)
+        print(len(data.get('articles', [])))
+except:
+    print('?')
+" 2>/dev/null || echo "?")
             echo "🗄️ Cache déduplication: $CACHE_SIZE articles connus"
           else
             echo "🗄️ Cache déduplication: présent"
