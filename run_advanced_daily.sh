@@ -7,7 +7,7 @@
 #   ./run_advanced_daily.sh rss 50 5      # RSS seulement, 50 articles, 5 jours
 #   ./run_advanced_daily.sh newsapi 40 2  # NewsAPI seulement (nécessite clé)
 
-set -e  # Arrêt en cas d'erreur
+set -euo pipefail  # Arrêt en cas d'erreur, variables non définies, erreurs de pipe
 
 # Configuration par défaut
 DEFAULT_SOURCE="mixed"
@@ -50,7 +50,7 @@ fi
 
 # Vérification clé NewsAPI si nécessaire
 if [[ "$SOURCE" == "newsapi" || "$SOURCE" == "mixed" ]]; then
-    if [[ -z "$NEWSAPI_KEY" ]]; then
+    if [[ -z "${NEWSAPI_KEY:-}" ]]; then
         echo -e "${YELLOW}⚠️  Variable NEWSAPI_KEY non définie${NC}"
         echo -e "   Pour utiliser NewsAPI, définissez: export NEWSAPI_KEY='votre_clé'"
         echo -e "   Ou utilisez: ./run_advanced_daily.sh rss $COUNT $DAYS"
@@ -74,7 +74,7 @@ echo ""
 CMD="python3 scripts/collect_news.py --source $SOURCE --count $COUNT --days $DAYS"
 
 # Ajouter la clé NewsAPI si disponible
-if [[ -n "$NEWSAPI_KEY" && ("$SOURCE" == "newsapi" || "$SOURCE" == "mixed") ]]; then
+if [[ -n "${NEWSAPI_KEY:-}" && ("$SOURCE" == "newsapi" || "$SOURCE" == "mixed") ]]; then
     CMD="$CMD --newsapi-key $NEWSAPI_KEY"
 fi
 
@@ -85,13 +85,13 @@ if eval $CMD; then
     echo ""
     
     # Affichage du dernier dataset créé
-    LATEST_CSV=$(ls -t datasets/news_*.csv 2>/dev/null | head -1)
+    LATEST_CSV=$(ls -t datasets/news_*.csv 2>/dev/null | head -1 || echo "")
     if [[ -n "$LATEST_CSV" ]]; then
         echo -e "${BLUE}📄 Dernier dataset: ${YELLOW}$LATEST_CSV${NC}"
         
         # Statistiques rapides
         if command -v wc &> /dev/null; then
-            LINES=$(wc -l < "$LATEST_CSV")
+            LINES=$(wc -l < "$LATEST_CSV" 2>/dev/null || echo "0")
             echo -e "${BLUE}📊 Lignes: ${YELLOW}$((LINES - 1))${NC} (hors header)"
         fi
         
@@ -127,14 +127,20 @@ else
     exit 1
 fi
 
-# Affichage des articles en cache (si activé)
+# Affichage des articles en cache (plus robuste sans jq)
 if [[ -f "datasets/.article_cache.json" ]]; then
-    if command -v jq &> /dev/null; then
-        CACHE_SIZE=$(jq '.articles | length' datasets/.article_cache.json 2>/dev/null || echo "?")
-        echo -e "${BLUE}🗄️  Cache de déduplication: ${YELLOW}$CACHE_SIZE${NC} articles connus"
-    else
-        echo -e "${BLUE}🗄️  Cache de déduplication activé (installez 'jq' pour voir la taille)${NC}"
-    fi
+    # Utiliser Python au lieu de jq pour éviter les broken pipes
+    CACHE_SIZE=$(python3 -c "
+import json
+import sys
+try:
+    with open('datasets/.article_cache.json', 'r') as f:
+        data = json.load(f)
+        print(len(data.get('articles', [])))
+except Exception:
+    print('?')
+" 2>/dev/null || echo "?")
+    echo -e "${BLUE}🗄️  Cache de déduplication: ${YELLOW}$CACHE_SIZE${NC} articles connus"
 fi
 
 echo ""
