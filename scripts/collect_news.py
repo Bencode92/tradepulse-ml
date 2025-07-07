@@ -51,9 +51,9 @@ FMP_LIMITS = {
     "press_releases": 5
 }
 
-# ML Models configuration
+# ML Models configuration - UPDATED with your actual model
 ML_MODELS_CONFIG = {
-    "production": "Bencode92/tradepulse-finbert-prod",
+    "production": "Bencode92/tradepulse-finbert-yiyanghkust-finbert-tone-20250707_162528",
     "development": "Bencode92/tradepulse-finbert-dev", 
     "fallback": "yiyanghkust/finbert-tone",
 }
@@ -118,11 +118,18 @@ class FMPNewsCollector:
             
             logger.info(f"🤖 Chargement du modèle ML: {self.ml_model_name}")
             
+            # Add HF token if available for custom models
+            model_kwargs = {}
+            if "Bencode92/" in self.ml_model_name and os.getenv("HF_TOKEN"):
+                model_kwargs["token"] = os.getenv("HF_TOKEN")
+                logger.info("🔑 Using HF token for custom model")
+            
             self.ml_classifier = pipeline(
                 "text-classification",
                 model=self.ml_model_name,
                 return_all_scores=True,
-                device=0 if torch.cuda.is_available() else -1
+                device=0 if torch.cuda.is_available() else -1,
+                **model_kwargs
             )
             
             logger.info(f"✅ Modèle ML chargé: {self.ml_model_name}")
