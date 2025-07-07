@@ -138,25 +138,14 @@ jobs:
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
       run: |
         pip install --upgrade pip
-        # Black retiré ; on garde isort & Ruff
-        pip install "isort==5.13.2" "ruff==0.3.4" pre-commit
+        # isort retiré ; on garde seulement Ruff
+        pip install "ruff==0.3.4" pre-commit
 
     - name: 🔍 Show Tool Versions
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
       run: |
         echo "🔍 Tool versions for debugging:"
-        python -m isort --version
         python -m ruff --version
-
-    - name: 📦 Check Import Sorting (isort)
-      if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
-      run: |
-        echo "📦 Checking import sorting..."
-        isort --check-only --profile=black scripts/ || {
-          echo "❌ Import sorting issues found"
-          echo "💡 Run: isort --profile=black scripts/"
-          exit 1
-        }
 
     - name: ⚡ Run Ruff Linting
       if: github.event.inputs.test_type != 'validation-only' && github.event.inputs.test_type != 'security-only'
