@@ -144,8 +144,31 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # CORRECTION: Configuration pour tests line accuracy
-            df = pd.read_csv(csv_path, keep_default_na=False)
+            # CORRECTION FINALE: Lecture optimale pour distinguer "" vs cellules vides
+            df = pd.read_csv(
+                csv_path,
+                keep_default_na=False,  # "" reste chaîne vide
+                na_filter=False         # Empêche conversion automatique en NaN
+            )
+            
+            # Traitement post-lecture : identifier les vraies cellules vides
+            # Les cellules complètement vides deviennent des chaînes vides ""
+            # On les convertit en NaN pour les distinguer des "" explicites
+            
+            # Sauvegarde de l'état original pour distinction
+            original_empty_mask = (df == "")
+            
+            # Lecture alternative pour identifier les vraies cellules vides
+            df_with_na = pd.read_csv(csv_path, keep_default_na=True)
+            true_na_mask = df_with_na.isnull()
+            
+            # Appliquer la distinction :
+            # - Cellules vraiment vides (dans CSV) → NaN
+            # - Chaînes vides explicites "" → restent ""
+            for col in df.columns:
+                if col in df_with_na.columns:
+                    df.loc[true_na_mask[col], col] = np.nan
+
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
             return False, self._generate_report()
@@ -190,7 +213,7 @@ class DatasetValidator:
             )
 
     def _check_content_detailed(self, df: pd.DataFrame):
-        """Vérifie le contenu avec détails ligne par ligne - CORRECTION NUMÉROTATION"""
+        """Vérifie le contenu avec détails ligne par ligne - LOGIQUE CORRIGÉE"""
         if "text" not in df.columns or "label" not in df.columns:
             return  # Déjà signalé dans _check_structure
 
@@ -198,25 +221,30 @@ class DatasetValidator:
         for idx, row in df.iterrows():
             real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
 
-            # CORRECTION : Logique simplifiée avec keep_default_na=False
+            # CORRECTION FINALE : Logique précise pour empty vs missing
             text_value = row.get("text")
 
-            # Avec keep_default_na=False : cellules vides deviennent ""
-            if text_value == "" or (isinstance(text_value, str) and text_value.strip() == ""):
-                self.add_error(
-                    "empty_text", f"Texte vide", real_line, "text"
-                )
-            elif pd.isnull(text_value) or str(text_value).lower() == "nan":
-                # Cas vraiment rares avec keep_default_na=False
+            if pd.isnull(text_value):
+                # Vraiment null/NaN (cellule vide dans le CSV)
                 self.add_error(
                     "missing_text", f"Texte manquant", real_line, "text"
                 )
+            elif isinstance(text_value, str) and text_value.strip() == "":
+                # Chaîne vide explicite "" ou espaces
+                self.add_error("empty_text", f"Texte vide", real_line, "text")
+            elif str(text_value).lower() == "nan":
+                # Cas edge : chaîne "nan" 
+                self.add_error("empty_text", f"Texte vide", real_line, "text")
 
             # Vérification des labels
             label_value = row.get("label")
-            if pd.isnull(label_value) or label_value == "":
+            if pd.isnull(label_value):
                 self.add_error(
                     "missing_label", f"Label manquant", real_line, "label"
+                )
+            elif isinstance(label_value, str) and label_value.strip() == "":
+                self.add_error(
+                    "missing_label", f"Label vide", real_line, "label"
                 )
             else:
                 label_str = str(label_value).strip()
@@ -231,9 +259,11 @@ class DatasetValidator:
 
         # Détection des doublons avec numéros de ligne
         if "text" in df.columns:
-            duplicated_mask = df["text"].duplicated(keep=False)
+            # Filtrer les valeurs non-null pour les doublons
+            valid_texts = df[df["text"].notna()]
+            duplicated_mask = valid_texts["text"].duplicated(keep=False)
             if duplicated_mask.any():
-                duplicate_groups = df[duplicated_mask].groupby("text")
+                duplicate_groups = valid_texts[duplicated_mask].groupby("text")
                 for text, group in duplicate_groups:
                     line_numbers = [idx + 2 for idx in group.index]  # Cohérent : +2
                     self.add_warning(
@@ -349,11 +379,9 @@ class DatasetValidator:
             )
 
             # Conversion explicite des types numpy en types Python natifs
-            text_lengths = (
-                df["text"].str.len()
-                if "text" in df.columns
-                else pd.Series(dtype=float)
-            )
+            # Calculer longueur seulement sur textes non-null
+            valid_texts = df[df["text"].notna()]["text"] if "text" in df.columns else pd.Series(dtype=str)
+            text_lengths = valid_texts.str.len() if not valid_texts.empty else pd.Series(dtype=float)
 
             report["statistics"] = {
                 "total_samples": int(len(df)),
@@ -376,8 +404,8 @@ class DatasetValidator:
                 }
                 if not valid_labels.empty
                 else {},
-                "duplicates": int(df["text"].duplicated().sum())
-                if "text" in df.columns
+                "duplicates": int(valid_texts.duplicated().sum())
+                if not valid_texts.empty
                 else 0,
             }
 
