@@ -197,9 +197,12 @@ class AdvancedNewsCollector:
             return label, 0.5, True
 
     def _article_hash(self, text: str) -> str:
-        """Génère un hash unique pour un article"""
+        """Génère un hash unique pour un article - AMÉLIORÉ"""
         # Normaliser le texte pour la déduplication
         normalized = text.lower().strip()
+        # Retirer "Sample X:" pour éviter doublons artificiels
+        if normalized.startswith("sample ") and ":" in normalized:
+            normalized = normalized.split(":", 1)[1].strip()
         # Retirer la ponctuation pour une meilleure détection des doublons
         normalized = "".join(c for c in normalized if c.isalnum() or c.isspace())
         return hashlib.md5(normalized.encode()).hexdigest()
@@ -222,12 +225,13 @@ class AdvancedNewsCollector:
         return start_date.isoformat(), end_date.isoformat()
 
     def collect_from_rss_extended(self, count: int = 40, days: int = 3) -> List[Dict]:
-        """Collecte RSS avec sources étendues et fenêtre temporelle"""
+        """Collecte RSS avec sources étendues et fenêtre temporelle - AMÉLIORÉ"""
         try:
             import feedparser
         except ImportError:
-            logger.warning("feedparser non installé. pip install feedparser")
-            return self.get_placeholder_samples(count)
+            logger.error("❌ feedparser non installé. pip install feedparser")
+            # Ne pas utiliser placeholder en cas d'erreur, retourner vide
+            return []
 
         # Sources RSS étendues (12 au lieu de 4)
         rss_feeds = [
@@ -282,7 +286,7 @@ class AdvancedNewsCollector:
                     summary = entry.get("summary", "")
                     text = f"{title}. {summary}".strip()
 
-                    # Vérification qualité et déduplication
+                    # Vérification qualité et déduplication AMÉLIORÉE
                     if len(text) > 50 and not self._is_duplicate(text):
                         # 🚀 NOUVEAU : Structure enrichie avec métadonnées
                         article_data = {
@@ -317,28 +321,29 @@ class AdvancedNewsCollector:
         if sources_used:
             logger.info(f"ℹ️ Sources utilisées: {dict(list(sources_used.items())[:5])}")
 
+        # CHANGEMENT : Ne pas utiliser placeholder automatiquement
         if not all_articles:
-            logger.warning("Aucun article RSS collecté, utilisation placeholder")
-            return self.get_placeholder_samples(count)
+            logger.warning("❌ Aucun article RSS collecté")
+            return []
 
         # Sélection équilibrée et labellisation
         selected = all_articles[:count]
         return self._label_articles(selected)
 
     def collect_from_newsapi_paginated(self, count: int = 30, days: int = 3, api_key: Optional[str] = None) -> List[Dict]:
-        """NewsAPI avec pagination et fenêtre temporelle"""
+        """NewsAPI avec pagination et fenêtre temporelle - AMÉLIORÉ"""
         if not api_key:
             api_key = os.getenv("NEWSAPI_KEY")
 
         if not api_key:
-            logger.warning("Clé NewsAPI manquante, utilisation placeholder")
-            return self.get_placeholder_samples(count)
+            logger.warning("⚠️ Clé NewsAPI manquante")
+            return []
 
         try:
             import requests
         except ImportError:
-            logger.warning("requests non installé. pip install requests")
-            return self.get_placeholder_samples(count)
+            logger.error("❌ requests non installé. pip install requests")
+            return []
 
         start_date, end_date = self.get_date_range(days)
         logger.info(f"🔍 Collecte NewsAPI: {start_date} à {end_date} ({days} jours)")
@@ -417,7 +422,7 @@ class AdvancedNewsCollector:
         return self._label_articles(selected)
 
     def collect_mixed_sources(self, count: int = 50, days: int = 3, api_key: Optional[str] = None) -> List[Dict]:
-        """Mode mixte optimisé: 70% RSS + 30% NewsAPI"""
+        """Mode mixte optimisé: 70% RSS + 30% NewsAPI - AMÉLIORÉ"""
         rss_count = int(count * 0.7)  # 70% RSS
         newsapi_count = count - rss_count  # 30% NewsAPI
 
@@ -429,13 +434,20 @@ class AdvancedNewsCollector:
         rss_articles = self.collect_from_rss_extended(rss_count, days)
         all_articles.extend(rss_articles)
 
-        # Collecte NewsAPI (complément)
-        if newsapi_count > 0:
+        # Collecte NewsAPI (complément) - seulement si clé disponible
+        if newsapi_count > 0 and api_key:
             newsapi_articles = self.collect_from_newsapi_paginated(newsapi_count, days, api_key)
             all_articles.extend(newsapi_articles)
+        elif newsapi_count > 0:
+            logger.warning("🔑 Clé NewsAPI manquante, utilisation RSS seulement")
 
         # Mélanger pour diversité
         random.shuffle(all_articles)
+        
+        # CHANGEMENT : Utiliser placeholder SEULEMENT si vraiment aucun article
+        if not all_articles:
+            logger.warning("❌ Aucun article de sources réelles - utilisation placeholder")
+            return self.get_placeholder_samples(count)
         
         logger.info(f"✅ Mode mixte: {len(all_articles)} articles uniques collectés")
         return all_articles[:count]
@@ -530,8 +542,8 @@ class AdvancedNewsCollector:
             return "neutral"
 
     def get_placeholder_samples(self, count: int = 20) -> List[Dict]:
-        """Échantillons placeholder pour tests (conservé de l'original mais adapté)"""
-        placeholder_data = [
+        """Échantillons placeholder pour tests - AMÉLIORÉ pour éviter doublons"""
+        base_samples = [
             {
                 "text": "Apple Inc. reported record quarterly earnings beating analyst expectations with strong iPhone sales and robust services revenue growth.",
                 "title": "Apple Reports Record Earnings",
@@ -558,57 +570,69 @@ class AdvancedNewsCollector:
                 "url": "https://example.com/sp500-flat",
                 "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
                 "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+            },
+            {
+                "text": "Tesla stock surged 12% in after-hours trading following better-than-expected delivery numbers and strong guidance for next quarter.",
+                "title": "Tesla Stock Surges",
+                "summary": "Strong delivery numbers drive stock higher",
+                "source": "placeholder",
+                "url": "https://example.com/tesla-surge",
+                "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
+                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
+            },
+            {
+                "text": "Oil prices dropped to $72 per barrel amid concerns about global economic slowdown and increased supply from OPEC+ members.",
+                "title": "Oil Prices Decline",
+                "summary": "Economic concerns drive prices lower",
+                "source": "placeholder",
+                "url": "https://example.com/oil-decline",
+                "published_date": datetime.datetime.now(PARIS_TZ).isoformat(),
+                "collected_at": datetime.datetime.now(PARIS_TZ).isoformat()
             }
         ]
         
-        # Compléter avec des échantillons générés si nécessaire
-        while len(placeholder_data) < count:
-            # Dupliquer et varier les échantillons existants
-            base = placeholder_data[len(placeholder_data) % len(placeholder_data)]
-            new_sample = base.copy()
-            new_sample["text"] = f"Sample {len(placeholder_data)}: " + base["text"]
-            new_sample["title"] = f"Sample {len(placeholder_data)}: " + base["title"]
-            placeholder_data.append(new_sample)
+        # CHANGEMENT : Créer de vraies variations au lieu de doublons avec "Sample X:"
+        placeholder_data = []
+        for i in range(count):
+            base_idx = i % len(base_samples)
+            sample = base_samples[base_idx].copy()
+            
+            # Variations légères pour éviter doublons identiques
+            if i >= len(base_samples):
+                variations = [
+                    ("reported", "announced"),
+                    ("strong", "robust"), 
+                    ("increased", "rose"),
+                    ("expectations", "forecasts"),
+                    ("performance", "results")
+                ]
+                
+                for old, new in variations:
+                    if old in sample["text"]:
+                        sample["text"] = sample["text"].replace(old, new, 1)
+                        break
+                        
+                sample["title"] = f"Update: {sample['title']}"
+            
+            placeholder_data.append(sample)
         
-        selected = placeholder_data[:count]
-        return self._label_articles(selected)
+        return self._label_articles(placeholder_data)
 
     def save_dataset_with_metadata(self, articles: List[Dict], output_file: Optional[Path] = None, metadata: Dict = None) -> Path:
-        """Sauvegarde avec métadonnées enrichies"""
+        """Sauvegarde avec métadonnées enrichies - SIMPLIFIÉ CSV"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
 
-        # 🚀 NOUVEAU : Sauvegarde CSV avec colonnes optionnelles selon l'usage
+        # SIMPLIFIÉ : Toujours CSV minimal (text, label)
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
+            writer.writerow(["text", "label"])
             
-            # Colonnes de base (toujours présentes)
-            base_columns = ["text", "label"]
-            
-            # Colonnes étendues pour debug/analyse (optionnelles)
-            if any(article.get("ml_confidence") is not None for article in articles):
-                # Mode ML activé, sauver plus de métadonnées dans CSV
-                extended_columns = ["text", "label", "confidence", "needs_review", "source", "title"]
-                writer.writerow(extended_columns)
-                
-                for article in articles:
-                    row = [
-                        article["text"],
-                        article["label"],
-                        article.get("ml_confidence", ""),
-                        article.get("needs_review", ""),
-                        article.get("source", ""),
-                        article.get("title", "")
-                    ]
-                    writer.writerow(row)
-            else:
-                # Mode basique, CSV minimal
-                writer.writerow(base_columns)
-                for article in articles:
-                    writer.writerow([article["text"], article["label"]])
+            for article in articles:
+                writer.writerow([article["text"], article["label"]])
 
-        # Sauvegarde métadonnées JSON complètes
+        # Sauvegarde métadonnées JSON complètes (optionnel)
         if metadata:
             json_file = output_file.with_suffix('.json')
             
@@ -642,8 +666,14 @@ class AdvancedNewsCollector:
             articles = self.get_placeholder_samples(count)
         elif source == "rss":
             articles = self.collect_from_rss_extended(count, days)
+            if not articles:  # Fallback si RSS échoue
+                logger.warning("🔄 RSS échoué, fallback sur placeholder")
+                articles = self.get_placeholder_samples(count)
         elif source == "newsapi":
             articles = self.collect_from_newsapi_paginated(count, days, kwargs.get("api_key"))
+            if not articles:  # Fallback si NewsAPI échoue
+                logger.warning("🔄 NewsAPI échoué, fallback sur placeholder")
+                articles = self.get_placeholder_samples(count)
         elif source == "mixed":
             articles = self.collect_mixed_sources(count, days, kwargs.get("api_key"))
         else:
@@ -718,6 +748,11 @@ def main():
     if args.seed is not None:
         random.seed(args.seed)
         logger.info(f"🎲 Seed: {args.seed}")
+
+    # NOUVEAU : Activer auto-label par défaut pour mixed/rss
+    if not args.auto_label and args.source in ["mixed", "rss"]:
+        logger.info("🤖 Auto-labelling ML activé par défaut pour source réelle")
+        args.auto_label = True
 
     # Résolution du modèle ML
     ml_model = args.custom_model if args.custom_model else args.ml_model
