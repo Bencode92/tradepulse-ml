@@ -144,11 +144,10 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # FIX: Paramètres pandas pour distinguer "" vs cellules vides
+            # FIX: keep_default_na=False pour que "" reste chaîne vide ; cellules vraiment vides ⇒ NaN
             df = pd.read_csv(
                 csv_path,
-                keep_default_na=False,  # NE transforme plus "" en NaN
-                na_values=[""],  # mais garde les vraies cellules vides ( , )
+                keep_default_na=False   # "" reste chaîne vide ; cellules vraiment vides ⇒ NaN
             )
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
