@@ -121,24 +121,25 @@ jobs:
         echo "  Count: $COUNT" 
         echo "  Days: $DAYS"
 
-    - name: 📰 Collect News Dataset with FMP API
+    - name: 📰 Collect News Dataset with Custom ML Model
       id: collect
       env:
         FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
         set -euo pipefail
         
-        echo "📰 Collecte FMP + ML Labeling..."
+        echo "📰 Collecte FMP + Custom ML Labeling..."
         echo "🔧 Paramètres: Source=$SOURCE, Count=$COUNT, Days=$DAYS"
         echo "🕐 Timezone: $TZ ($(date))"
         
         # Utiliser le suffixe généré pour le nom de fichier
         DATASET_FILE="datasets/news_${DATASET_SUFFIX}.csv"
         
-        # Collecte FMP avec ML automatique
+        # Collecte FMP avec VOTRE modèle ML
         if [ "$SOURCE" = "fmp" ]; then
-          echo "🤖 ML Labeling FMP automatique activé"
-          EXTRA_ARGS="--auto-label --ml-model fallback --confidence-threshold 0.75"
+          echo "🤖 ML Labeling avec VOTRE modèle custom activé"
+          EXTRA_ARGS="--auto-label --ml-model production --confidence-threshold 0.75"
         else
           echo "📝 Mode placeholder (test)"
           EXTRA_ARGS=""
@@ -152,7 +153,7 @@ jobs:
             --output "$DATASET_FILE" \
             $EXTRA_ARGS; then
           
-          echo "✅ Collecte FMP réussie"
+          echo "✅ Collecte FMP + Custom ML réussie"
           echo "📁 Fichier cible: $DATASET_FILE"
           
           if [ -f "$DATASET_FILE" ]; then
@@ -165,11 +166,14 @@ jobs:
               echo "📁 Métadonnées FMP créées: $JSON_FILE"
               
               if command -v jq >/dev/null 2>&1; then
-                echo "🤖 Informations ML:"
+                echo "🤖 Informations Custom ML:"
                 jq -r 'if .auto_labeling_enabled then "  ML activé: " + (.ml_model_used // "N/A") else "  ML désactivé" end' "$JSON_FILE" 2>/dev/null || echo "  (infos ML non disponibles)"
                 
-                echo "📊 Distribution FMP:"
+                echo "📊 Distribution avec Custom ML:"
                 jq -r '.label_distribution | to_entries[] | "  " + .key + ": " + (.value | tostring)' "$JSON_FILE" 2>/dev/null || echo "  (distribution non disponible)"
+                
+                echo "🎯 Confiance Custom ML:"
+                jq -r '"  Articles haute confiance: " + (.high_confidence_articles // 0 | tostring) + "/" + (.article_count // 0 | tostring)' "$JSON_FILE" 2>/dev/null || echo "  (confiance non disponible)"
               fi
             fi
             
@@ -184,6 +188,7 @@ jobs:
           echo "❌ Échec de la collecte FMP"
           echo "💡 Solutions possibles:"
           echo "  - Vérifier FMP_API_KEY dans les secrets"
+          echo "  - Vérifier HF_TOKEN pour votre modèle custom"
           echo "  - Vérifier la connexion internet"
           echo "  - Tester avec 'placeholder' si FMP échoue"
           echo "  - Installer les dépendances ML: pip install transformers torch"
@@ -223,13 +228,13 @@ jobs:
           echo "✅ Validation basique OK"
         fi
 
-    - name: 📊 Dataset Statistics FMP
+    - name: 📊 Dataset Statistics Custom ML
       if: steps.collect.outputs.dataset-created == 'true'
       run: |
         DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
         
-        echo "📊 Statistiques dataset FMP:"
-        echo "=========================="
+        echo "📊 Statistiques dataset avec Custom ML:"
+        echo "====================================="
         
         # Statistiques CSV basiques
         TOTAL_LINES=$(wc -l < "$DATASET_PATH")
@@ -239,7 +244,7 @@ jobs:
         echo "📊 Échantillons: $DATA_LINES"
         echo "💾 Taille: $(du -h "$DATASET_PATH" | cut -f1)"
         echo "🕐 Créé: $(TZ='Europe/Paris' date)"
-        echo "🏭 Source: FMP API ($DAYS jours)"
+        echo "🏭 Source: FMP API + Custom ML ($DAYS jours)"
         
         # Cache déduplication
         CACHE_FILE="datasets/.article_cache.json"
@@ -254,7 +259,7 @@ jobs:
         
         # Distribution des labels
         echo ""
-        echo "🏷️ Distribution des labels FMP:"
+        echo "🏷️ Distribution avec Custom ML:"
         tail -n +2 "$DATASET_PATH" | cut -d',' -f2 | sort | uniq -c | while read count label; do
           if command -v bc >/dev/null 2>&1; then
             percentage=$(echo "scale=1; $count * 100 / $DATA_LINES" | bc -l)
@@ -266,7 +271,7 @@ jobs:
         
         # Aperçu du contenu
         echo ""
-        echo "👀 Aperçu contenu FMP:"
+        echo "👀 Aperçu contenu Custom ML:"
         tail -n +2 "$DATASET_PATH" | head -3
 
     - name: 📝 Smart Commit and Push
@@ -307,16 +312,17 @@ jobs:
         # Commit selon la logique
         if [ "$HAS_CHANGES" = "true" ]; then
           COMMIT_MSG=$(cat <<EOF
-        📰 Add FMP financial news dataset with ML labeling ($TODAY)
+        📰 Add FMP dataset with Custom ML labeling ($TODAY)
 
         📊 Dataset details:
         - File: $DATASET_PATH
         - Samples: $SAMPLE_COUNT
-        - Source: FMP API (fenêtre: $DAYS jours)
+        - Source: FMP API + Bencode92/tradepulse-finbert-prod
         - Generated: $FULL_TIMESTAMP
-        - ML Labeling: ✅ Enabled (FinBERT)
+        - ML Labeling: ✅ Custom Model (production)
 
-        🤖 Auto-generated by FMP News Collection workflow
+        🚀 This dataset will improve the custom model via fine-tuning
+        🤖 Auto-generated by FMP + Custom ML workflow
         EOF
         )
           
@@ -324,7 +330,7 @@ jobs:
           echo "✅ Commit effectué avec changements"
           
         elif [ "$FORCE_COMMIT" = "true" ]; then
-          COMMIT_MSG="🔄 Forced FMP dataset update ($TODAY)"
+          COMMIT_MSG="🔄 Forced Custom ML dataset update ($TODAY)"
           git commit -m "$COMMIT_MSG" --allow-empty
           echo "🔄 Commit forcé effectué"
           
@@ -341,10 +347,10 @@ jobs:
         echo "🚀 Pushing to repository..."
         git push
         
-        echo "✅ Dataset FMP committed and pushed successfully"
-        echo "🔄 This will trigger validation and fine-tuning workflows"
+        echo "✅ Custom ML dataset committed and pushed successfully"
+        echo "🔄 This will trigger fine-tuning to improve your custom model"
 
-    - name: 📝 Create Summary Comment (FMP Edition)
+    - name: 📝 Create Summary Comment (Custom ML)
       if: always() && github.event_name == 'workflow_dispatch'
       uses: actions/github-script@v7
       with:
@@ -363,54 +369,54 @@ jobs:
             emoji = '✅';
             statusText = 'SUCCESS';
             
-            message = `🎉 Dataset FMP créé avec succès + ML Labeling !
+            message = `🎉 Dataset créé avec VOTRE modèle ML custom !
             
             **📊 Détails du dataset:**
             - 📄 Fichier: \`${datasetPath}\`
             - 📊 Échantillons: ${sampleCount}
-            - 🏭 Source: Financial Modeling Prep API
-            - 📅 Fenêtre temporelle: ${days} jours
-            - 🤖 ML Labeling: ✅ Activé (FinBERT)
+            - 🏭 Source: FMP API + Custom ML
+            - 🤖 Modèle: Bencode92/tradepulse-finbert-prod
+            - 📅 Fenêtre: ${days} jours
             - 🕐 Timezone: Europe/Paris
             
-            **🔥 Avantages FMP:**
-            - ✅ Sources financières premium (Bloomberg, Reuters, WSJ)
-            - ✅ 5 endpoints spécialisés (stock, crypto, forex, etc.)
-            - ✅ Pagination intelligente par intervalles
-            - ✅ Déduplication avancée
-            - ✅ ML Labeling automatique
+            **🔥 Votre modèle custom en action:**
+            - ✅ Utilise VOTRE modèle entraîné
+            - ✅ Analyse sentiment avec vos données
+            - ✅ S'améliore à chaque commit
+            - ✅ Cycle d'apprentissage continu
             
-            **🔄 Prochaines étapes:**
-            1. 🔍 Validation automatique déclenchée
-            2. 🤖 Fine-tuning si validation OK
-            3. 🚀 Modèle disponible sur HuggingFace`;
+            **🔄 Prochaines étapes automatiques:**
+            1. 🔍 Validation qualité
+            2. 🤖 Fine-tuning de VOTRE modèle
+            3. 🚀 Mise à jour sur HuggingFace
+            4. 🔄 Prêt pour prochaine collecte`;
           } else {
             emoji = '❌';
             statusText = 'FAILED';
-            message = `🚨 Échec de la collecte FMP.
+            message = `🚨 Échec de la collecte avec Custom ML.
             
             **⚠️ Problème détecté:**
             - Status: ${status}
             - Dataset créé: ${datasetCreated}
             
             **🔧 Actions suggérées:**
-            1. Vérifier FMP_API_KEY dans les secrets
-            2. Tester localement: \`python scripts/collect_news.py --source fmp --count 20\`
-            3. Vérifier dépendances: \`pip install requests transformers torch\`
-            4. Test fallback: \`python scripts/collect_news.py --source placeholder\``;
+            1. Vérifier FMP_API_KEY et HF_TOKEN dans les secrets
+            2. Tester localement: \`python scripts/collect_news.py --source fmp --ml-model production\`
+            3. Vérifier accès au modèle: Bencode92/tradepulse-finbert-prod
+            4. Test fallback: \`python scripts/collect_news.py --source fmp --ml-model fallback\``;
           }
           
-          const commentBody = `## ${emoji} FMP News Collection + ML Labeling - ${statusText}
+          const commentBody = `## ${emoji} Custom ML Collection - ${statusText}
           
           ${message}
           
           ### 🔗 Liens utiles
           - 📊 [Workflow complet](${runUrl})
-          - 🏭 Script FMP: \`scripts/collect_news.py\` (Financial Modeling Prep)
-          - 📖 [Guide des datasets](DATASET_WORKFLOW.md)
+          - 🤖 [Votre modèle](https://huggingface.co/Bencode92/tradepulse-finbert-prod)
+          - 🏭 Script: \`scripts/collect_news.py\` (Custom ML)
           
           ---
-          *🤖 Collecte FMP automatique avec ML Labeling FinBERT*
+          *🤖 Collecte avec VOTRE modèle Bencode92/tradepulse-finbert-prod*
           `;
           
           console.log('Workflow summary:', commentBody);
@@ -429,46 +435,30 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const issueBody = `# 🚨 Échec de la collecte FMP quotidienne
+          const issueBody = `# 🚨 Échec collecte Custom ML quotidienne
 
-          La collecte automatique FMP + ML du ${new Date().toISOString().split('T')[0]} a échoué.
+          La collecte automatique avec votre modèle custom du ${new Date().toISOString().split('T')[0]} a échoué.
 
           ## 📊 Détails
-          - **Workflow:** FMP News Collection + ML Labeling
-          - **Source:** Financial Modeling Prep API
+          - **Workflow:** Custom ML Collection (Bencode92/tradepulse-finbert-prod)
+          - **Source:** FMP API + Custom Model
           - **Trigger:** Scheduled (cron)
           - **Timestamp:** ${new Date().toISOString()}
-          - **Run ID:** ${context.runId}
-
-          ## 🔗 Liens
-          - [Workflow failed](${context.payload.repository.html_url}/actions/runs/${context.runId})
-          - [Script FMP](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
 
           ## 🔧 Actions suggérées
-          1. Vérifier FMP_API_KEY dans les secrets Actions
-          2. Tester collecte FMP: \`python scripts/collect_news.py --source fmp --count 20\`
-          3. Vérifier dépendances ML: \`pip install transformers torch\`
-          4. Test sans ML: \`python scripts/collect_news.py --source fmp --days 3\`
-          5. Vérifier endpoints FMP API
-
-          ## 🤖 Test FMP Local
-          \`\`\`bash
-          # Test complet avec ML
-          export FMP_API_KEY="your_key"
-          python scripts/collect_news.py --source fmp --count 20 --auto-label --ml-model fallback
-          
-          # Test simple sans ML
-          python scripts/collect_news.py --source fmp --count 10 --days 3
-          \`\`\`
+          1. Vérifier FMP_API_KEY et HF_TOKEN dans les secrets
+          2. Tester votre modèle: \`python scripts/collect_news.py --source fmp --ml-model production\`
+          3. Vérifier accès Bencode92/tradepulse-finbert-prod
+          4. Test fallback: \`--ml-model fallback\`
 
           ---
-          *Issue créée automatiquement par le système de monitoring FMP*
+          *Issue automatique Custom ML*
           `;
 
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: `🚨 Échec collecte FMP ${new Date().toISOString().split('T')[0]}`,
+            title: `🚨 Échec Custom ML ${new Date().toISOString().split('T')[0]}`,
             body: issueBody,
-            labels: ['bug', 'automation', 'fmp-collection', 'ml-labeling']
+            labels: ['bug', 'automation', 'custom-ml']
           });
