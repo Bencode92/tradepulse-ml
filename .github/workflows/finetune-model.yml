@@ -1,5 +1,12 @@
 name: 🤖 TradePulse FinBERT Fine-tuning
 
+# 🔐 PERMISSIONS REQUISES POUR RELEASES
+permissions:
+  contents: write      # Pour créer des releases et tags
+  actions: read        # Pour lire les workflows
+  issues: write        # Pour commenter sur les issues/PRs
+  pull-requests: write # Pour commenter sur les PRs
+
 on:
   # Déclenchement manuel avec paramètres
   workflow_dispatch:
@@ -142,7 +149,7 @@ jobs:
       with:
         lfs: true
         fetch-depth: 2      # ← FIX: garantit que HEAD~1 existe
-        token: ${{ secrets.GH_TOKEN }}
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: 🐍 Setup Python 3.9
       uses: actions/setup-python@v4
