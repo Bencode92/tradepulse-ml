@@ -142,7 +142,7 @@ jobs:
       with:
         lfs: true
         fetch-depth: 2      # ← FIX: garantit que HEAD~1 existe
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.GH_TOKEN }}
 
     - name: 🐍 Setup Python 3.9
       uses: actions/setup-python@v4
