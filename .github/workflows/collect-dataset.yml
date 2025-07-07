@@ -79,8 +79,8 @@ jobs:
         # Dépendances de base
         pip install pandas>=2.0.0
         
-        # Dépendances pour collecte avancée (NOUVEAU)
-        pip install feedparser requests || echo "Optional dependencies failed, will use placeholder"
+        # Dépendances pour collecte avancée + ML
+        pip install feedparser requests transformers torch || echo "ML dependencies failed, will use basic labeling"
         
         echo "✅ Dependencies installed"
 
@@ -97,7 +97,7 @@ jobs:
           echo "FORCE_COMMIT=${{ github.event.inputs.force_commit }}" >> $GITHUB_ENV
           echo "INCLUDE_TIME=${{ github.event.inputs.include_time }}" >> $GITHUB_ENV
         else
-          # Déclenchement automatique (cron) - NOUVEAUX DÉFAUTS OPTIMISÉS
+          # Déclenchement automatique (cron) - PARAMÈTRES OPTIMISÉS
           echo "SOURCE=mixed" >> $GITHUB_ENV
           echo "COUNT=40" >> $GITHUB_ENV
           echo "DAYS=3" >> $GITHUB_ENV
@@ -127,22 +127,38 @@ jobs:
         echo "  Force commit: $FORCE_COMMIT"
         echo "  Include time: $INCLUDE_TIME"
 
-    - name: 📰 Collect News Dataset (NOUVEAU - Version Avancée)
+    - name: 📰 Collect News Dataset with ML Labeling
       id: collect
       env:
         NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
       run: |
         set -euo pipefail
         
-        echo "📰 Collecte des actualités financières (Version Avancée)..."
+        echo "📰 Collecte des actualités financières + ML Labeling..."
         echo "🔧 Paramètres: Source=$SOURCE, Count=$COUNT, Days=$DAYS"
         echo "🕐 Timezone: $TZ ($(date))"
         
         # Utiliser le suffixe généré pour le nom de fichier
         DATASET_FILE="datasets/news_${DATASET_SUFFIX}.csv"
         
-        # NOUVEAU : Appel avec paramètre --days
-        if python scripts/collect_news.py --source "$SOURCE" --count "$COUNT" --days "$DAYS" --output "$DATASET_FILE"; then
+        # NOUVEAU : ML Labeling activé automatiquement pour sources réelles
+        if [ "$SOURCE" = "mixed" ] || [ "$SOURCE" = "rss" ]; then
+          echo "🤖 ML Labeling automatique activé pour source: $SOURCE"
+          EXTRA_ARGS="--auto-label --ml-model fallback --confidence-threshold 0.75"
+        else
+          echo "📝 Mode labeling basique pour source: $SOURCE"
+          EXTRA_ARGS=""
+        fi
+        
+        # Collecte avec paramètres optimisés
+        if python scripts/collect_news.py \
+            --source "$SOURCE" \
+            --count "$COUNT" \
+            --days "$DAYS" \
+            --output "$DATASET_FILE" \
+            --newsapi-key "${NEWSAPI_KEY:-}" \
+            $EXTRA_ARGS; then
+          
           echo "✅ Collecte réussie"
           echo "📁 Fichier cible: $DATASET_FILE"
           
@@ -150,16 +166,18 @@ jobs:
             SAMPLE_COUNT=$(tail -n +2 "$DATASET_FILE" | wc -l)
             echo "📊 Dataset créé: $DATASET_FILE ($SAMPLE_COUNT échantillons)"
             
-            # Vérifier si un fichier JSON de métadonnées a été créé (mais ne l'afficher que si jq est disponible)
+            # Vérifier si un fichier JSON de métadonnées a été créé
             JSON_FILE="${DATASET_FILE%.csv}.json"
             if [ -f "$JSON_FILE" ]; then
               echo "📁 Métadonnées créées: $JSON_FILE"
               
-              # CORRIGÉ: Éviter broken pipe avec jq
+              # Afficher infos ML si disponibles
               if command -v jq >/dev/null 2>&1; then
-                echo "📊 Métadonnées du dataset (aperçu):"
-                # Solution 1: Utiliser jq avec limite intégrée
-                jq -r '. | {filename, created_at, article_count, label_distribution, cache_size}' "$JSON_FILE" 2>/dev/null || echo "  (aperçu des métadonnées non disponible)"
+                echo "🤖 Informations ML:"
+                jq -r 'if .auto_labeling_enabled then "  ML activé: " + (.ml_model_used // "N/A") + " (confiance: " + (.confidence_threshold // 0 | tostring) + ")" else "  ML désactivé" end' "$JSON_FILE" 2>/dev/null || echo "  (infos ML non disponibles)"
+                
+                echo "📊 Distribution labels:"
+                jq -r '.label_distribution | to_entries[] | "  " + .key + ": " + (.value | tostring)' "$JSON_FILE" 2>/dev/null || echo "  (distribution non disponible)"
               fi
             fi
             
@@ -176,6 +194,7 @@ jobs:
           echo "  - Vérifier la connexion internet"
           echo "  - Tester avec 'placeholder' si RSS/NewsAPI échouent"
           echo "  - Vérifier la clé NEWSAPI_KEY pour sources newsapi/mixed"
+          echo "  - Installer les dépendances ML: pip install transformers torch"
           exit 1
         fi
 
@@ -218,8 +237,8 @@ jobs:
       run: |
         DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
         
-        echo "📊 Statistiques du dataset (Version Avancée):"
-        echo "============================================="
+        echo "📊 Statistiques du dataset (avec ML):"
+        echo "====================================="
         
         # Statistiques CSV basiques
         TOTAL_LINES=$(wc -l < "$DATASET_PATH")
@@ -242,7 +261,7 @@ jobs:
           fi
         fi
         
-        # Distribution des labels si bc est disponible
+        # Distribution des labels avec pourcentages
         echo ""
         echo "🏷️ Distribution des labels:"
         tail -n +2 "$DATASET_PATH" | cut -d',' -f2 | sort | uniq -c | while read count label; do
@@ -254,10 +273,18 @@ jobs:
           fi
         done
         
-        # Aperçu du contenu
+        # Vérifier la qualité (pas de doublons "Sample X:")
+        DUPLICATES=$(tail -n +2 "$DATASET_PATH" | cut -d',' -f1 | grep -c "^Sample [0-9]*:" || echo "0")
+        if [ "$DUPLICATES" -gt 0 ]; then
+          echo "⚠️ Doublons détectés: $DUPLICATES articles 'Sample X:'"
+        else
+          echo "✅ Aucun doublon 'Sample X:' détecté"
+        fi
+        
+        # Aperçu du contenu (sans headers pour éviter confusion)
         echo ""
         echo "👀 Aperçu du contenu:"
-        head -4 "$DATASET_PATH"
+        tail -n +2 "$DATASET_PATH" | head -3
 
     - name: 📝 Smart Commit and Push
       if: steps.collect.outputs.dataset-created == 'true'
@@ -275,7 +302,7 @@ jobs:
         TODAY=$(TZ='Europe/Paris' date '+%Y-%m-%d')
         FULL_TIMESTAMP=$(TZ='Europe/Paris' date '+%Y-%m-%d %H:%M:%S %Z')
         
-        # Diagnostic AVANT git add (safe commands with || true)
+        # Diagnostic AVANT git add
         echo "🔍 Diagnostic Git AVANT git add:"
         echo "  Working directory status:"
         git status --porcelain | head -10 || true
@@ -284,24 +311,23 @@ jobs:
           echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
         fi
         
-        # Ajouter seulement le fichier CSV (éviter JSON si non désiré)
+        # Ajouter seulement le fichier CSV (pas de JSON par défaut)
         echo "🔧 Executing: git add $DATASET_PATH"
         git add "$DATASET_PATH"
         
         # Ajouter le cache de déduplication s'il existe
         if [ -f "datasets/.article_cache.json" ]; then
           git add datasets/.article_cache.json
+          echo "🗄️ Cache de déduplication ajouté"
         fi
         
         # Diagnostic APRÈS git add
         echo ""
         echo "🔍 Diagnostic Git APRÈS git add:"
-        echo "  Staged files (via git diff):"
+        echo "  Staged files:"
         git diff --staged --name-only | head -10 || true
-        echo "  Working directory status:"
-        git status --porcelain | head -10 || true
         
-        # Vérifier s'il y a des changements - logique intelligente
+        # Vérifier s'il y a des changements
         HAS_CHANGES=false
         if ! git diff --staged --quiet; then
           HAS_CHANGES=true
@@ -314,74 +340,49 @@ jobs:
         
         # Décider du commit selon la logique
         if [ "$HAS_CHANGES" = "true" ]; then
-          # Il y a des changements → commit normal
-          COMMIT_ACTION="normal"
-          
-          # Message amélioré avec infos de la collecte avancée
+          # Commit normal avec infos ML
           COMMIT_MSG=$(cat <<EOF
-        📰 Add daily financial news dataset ($TODAY)
+        📰 Add daily news dataset with ML labeling ($TODAY)
 
         📊 Dataset details:
         - File: $DATASET_PATH
         - Samples: $SAMPLE_COUNT
         - Source: $SOURCE (fenêtre: $DAYS jours)
         - Generated: $FULL_TIMESTAMP
-        - Collection: Version avancée avec déduplication
+        - ML Labeling: $([ "$SOURCE" = "mixed" ] || [ "$SOURCE" = "rss" ] && echo "✅ Enabled (FinBERT)" || echo "❌ Disabled")
 
-        🚀 Nouveautés: Cache déduplication, sources multiples, fenêtre temporelle
-        🤖 Auto-generated by Daily News Collection workflow
+        🤖 Auto-generated by Daily News Collection workflow v2
         EOF
         )
+          
+          git commit -m "$COMMIT_MSG"
+          echo "✅ Commit effectué avec changements"
           
         elif [ "$FORCE_COMMIT" = "true" ]; then
-          # Pas de changements mais commit forcé
-          COMMIT_ACTION="forced"
-          
-          COMMIT_MSG=$(cat <<EOF
-        🔄 Forced dataset update ($TODAY)
-
-        📊 Dataset details:
-        - File: $DATASET_PATH (regenerated)
-        - Samples: $SAMPLE_COUNT
-        - Source: $SOURCE (fenêtre: $DAYS jours)
-        - Generated: $FULL_TIMESTAMP
-
-        ⚠️ Forced commit with --allow-empty (manual trigger)
-        EOF
-        )
+          # Commit forcé
+          COMMIT_MSG="🔄 Forced dataset update ($TODAY) - regenerated"
+          git commit -m "$COMMIT_MSG" --allow-empty
+          echo "🔄 Commit forcé effectué"
           
         else
-          # Pas de changements et pas de commit forcé → skip proprement
+          # Pas de changements
           echo "🔄 Pas de changements et force_commit=false → skip commit"
           echo "💡 Le dataset existe déjà et est identique"
-          echo "🛠️ Pour forcer un commit: relancez avec force_commit=true"
           echo "✅ Workflow terminé avec succès (pas de commit nécessaire)"
           exit 0
         fi
         
-        # Exécuter le commit selon l'action
-        echo ""
-        echo "🚀 Action: commit $COMMIT_ACTION"
-        
-        if [ "$COMMIT_ACTION" = "forced" ]; then
-          git commit -m "$COMMIT_MSG" --allow-empty
-          echo "🔄 Commit forcé effectué (même sans changements)"
-        else
-          git commit -m "$COMMIT_MSG"
-          echo "✅ Commit normal effectué avec changements"
-        fi
-        
-        # Configurer l'URL remote avec le token pour le push
+        # Push avec authentification
         echo "🔧 Configuration de l'authentification Git..."
         git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git"
         
-        echo "🚀 Pushing to repository avec authentification..."
+        echo "🚀 Pushing to repository..."
         git push
         
         echo "✅ Dataset committed and pushed successfully"
         echo "🔄 This will trigger validation and fine-tuning workflows"
 
-    - name: 📝 Create Summary Comment (AMÉLIORÉ)
+    - name: 📝 Create Summary Comment (ML INFO)
       if: always() && github.event_name == 'workflow_dispatch'
       uses: actions/github-script@v7
       with:
@@ -392,7 +393,6 @@ jobs:
           const sampleCount = '${{ steps.collect.outputs.sample-count }}';
           const source = '${{ env.SOURCE }}';
           const days = '${{ env.DAYS }}';
-          const datasetSuffix = '${{ env.DATASET_SUFFIX }}';
           const runUrl = `${context.payload.repository.html_url}/actions/runs/${context.runId}`;
           
           let emoji, statusText, message;
@@ -400,29 +400,30 @@ jobs:
           if (status === 'success' && datasetCreated) {
             emoji = '✅';
             statusText = 'SUCCESS';
-            message = `🎉 Dataset créé avec succès (Version Avancée) !
+            
+            const mlEnabled = source === 'mixed' || source === 'rss';
+            
+            message = `🎉 Dataset créé avec succès + ML Labeling !
             
             **📊 Détails du dataset:**
             - 📄 Fichier: \`${datasetPath}\`
             - 📊 Échantillons: ${sampleCount}
             - 🔗 Source: ${source}
             - 📅 Fenêtre temporelle: ${days} jours
-            - 📅 Suffixe: ${datasetSuffix}
+            - 🤖 ML Labeling: ${mlEnabled ? '✅ Activé (FinBERT)' : '❌ Désactivé'}
             - 🕐 Timezone: Europe/Paris
-            - 🚀 Timestamp: ${new Date().toISOString()}
             
-            **🔥 Nouvelles fonctionnalités:**
-            - ✅ Cache de déduplication automatique
-            - ✅ 12 sources RSS au lieu de 4
-            - ✅ Pagination NewsAPI intelligente
-            - ✅ Mode mixte optimisé (70% RSS + 30% NewsAPI)
-            - ✅ Métadonnées enrichies
+            **🔥 Améliorations appliquées:**
+            - ✅ Déduplication améliorée (plus de "Sample X:" en doublon)
+            - ✅ ML Labeling automatique pour sources réelles
+            - ✅ Fallback intelligent si RSS/API échouent
+            - ✅ Cache persistant pour éviter répétitions
+            - ✅ CSV simplifié (text, label) compatible
             
             **🔄 Prochaines étapes:**
-            Le dataset a été committé et va déclencher automatiquement :
-            1. 🔍 Validation qualité (Dataset Quality Gate)
-            2. 🤖 Fine-tuning automatique (si validation OK)
-            3. 🚀 Déploiement sur HuggingFace (si configuré)`;
+            1. 🔍 Validation automatique déclenchée
+            2. 🤖 Fine-tuning si validation OK
+            3. 🚀 Modèle disponible sur HuggingFace`;
           } else {
             emoji = '❌';
             statusText = 'FAILED';
@@ -434,24 +435,22 @@ jobs:
             
             **🔧 Actions suggérées:**
             1. Vérifier les logs du workflow
-            2. Tester la collecte localement: \`./run_advanced_daily.sh mixed 30 3\`
-            3. Vérifier les dépendances (feedparser, requests)
-            4. Tester avec placeholder: \`python scripts/collect_news.py --source placeholder\`
-            5. Vérifier les règles .gitignore`;
+            2. Tester localement: \`python scripts/collect_news.py --source mixed --count 30\`
+            3. Vérifier dépendances: \`pip install feedparser requests transformers torch\`
+            4. Test fallback: \`python scripts/collect_news.py --source placeholder\``;
           }
           
-          const commentBody = `## ${emoji} Daily News Collection (Version Avancée) - ${statusText}
+          const commentBody = `## ${emoji} Daily News Collection + ML Labeling - ${statusText}
           
           ${message}
           
           ### 🔗 Liens utiles
           - 📊 [Workflow complet](${runUrl})
-          - 🔧 Script: \`scripts/collect_news.py\` (Version Avancée)
+          - 🤖 Script ML: \`scripts/collect_news.py\` (version améliorée)
           - 📖 [Guide des datasets](DATASET_WORKFLOW.md)
-          - 🚀 Script express: \`./run_advanced_daily.sh\`
           
           ---
-          *🤖 Rapport automatique de collecte quotidienne - Version Avancée avec déduplication*
+          *🤖 Collecte automatique avec ML Labeling FinBERT activé*
           `;
           
           console.log('Workflow summary:', commentBody);
@@ -470,44 +469,44 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const issueBody = `# 🚨 Échec de la collecte quotidienne de dataset
+          const issueBody = `# 🚨 Échec de la collecte quotidienne + ML
 
-          La collecte automatique de dataset du ${new Date().toISOString().split('T')[0]} a échoué.
+          La collecte automatique avec ML labeling du ${new Date().toISOString().split('T')[0]} a échoué.
 
           ## 📊 Détails
-          - **Workflow:** Daily News Dataset Collection (Version Avancée)
+          - **Workflow:** Daily News Collection + ML Labeling
           - **Trigger:** Scheduled (cron)
           - **Timestamp:** ${new Date().toISOString()}
           - **Run ID:** ${context.runId}
 
           ## 🔗 Liens
           - [Workflow failed](${context.payload.repository.html_url}/actions/runs/${context.runId})
-          - [Script de collecte](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
+          - [Script collecte ML](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
 
           ## 🔧 Actions suggérées
           1. Vérifier les logs du workflow
-          2. Tester la collecte manuellement: \`./run_advanced_daily.sh mixed 40 3\`
-          3. Vérifier la disponibilité des sources RSS/API
-          4. Tester avec placeholder: \`python scripts/collect_news.py --source placeholder\`
-          5. Lancer une collecte manuelle si nécessaire
+          2. Tester collecte + ML: \`python scripts/collect_news.py --source mixed --auto-label\`
+          3. Vérifier dépendances ML: \`pip install transformers torch\`
+          4. Test sans ML: \`python scripts/collect_news.py --source mixed\`
+          5. Vérifier sources RSS/NewsAPI
 
-          ## 💡 Collecte manuelle
-          Vous pouvez lancer une collecte manuelle via :
-          **Actions → Daily News Dataset Collection → Run workflow**
-
-          Nouvelles options disponibles :
-          - **Source:** mixed (recommandé), rss, newsapi, placeholder
-          - **Count:** 40 (défaut optimisé)
-          - **Days:** 3 (fenêtre temporelle en jours)
+          ## 🤖 Test ML Local
+          \`\`\`bash
+          # Test complet avec ML
+          python scripts/collect_news.py --source mixed --count 20 --auto-label --ml-model fallback
+          
+          # Test simple sans ML
+          python scripts/collect_news.py --source rss --count 15
+          \`\`\`
 
           ---
-          *Issue créée automatiquement par le système de monitoring*
+          *Issue créée automatiquement par le système de monitoring ML*
           `;
 
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: `🚨 Échec collecte automatique dataset ${new Date().toISOString().split('T')[0]}`,
+            title: `🚨 Échec collecte ML ${new Date().toISOString().split('T')[0]}`,
             body: issueBody,
-            labels: ['bug', 'automation', 'dataset-collection']
+            labels: ['bug', 'automation', 'dataset-collection', 'ml-labeling']
           });
