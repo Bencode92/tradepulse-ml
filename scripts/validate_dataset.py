@@ -144,12 +144,8 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # FIX: Configuration optimale pour distinguer "" vs cellules vides
-            df = pd.read_csv(
-                csv_path,
-                keep_default_na=True,   # Garde le comportement par défaut pour les vraies cellules vides
-                na_values=[]            # Mais ne convertit pas "" en NaN
-            )
+            # CORRECTION: Configuration pour tests line accuracy
+            df = pd.read_csv(csv_path, keep_default_na=False)
         except Exception as e:
             self.add_error("csv_parse_error", f"Erreur lecture CSV: {e}")
             return False, self._generate_report()
@@ -202,23 +198,19 @@ class DatasetValidator:
         for idx, row in df.iterrows():
             real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
 
-            # CORRECTION : Logique améliorée pour empty vs missing
+            # CORRECTION : Logique simplifiée avec keep_default_na=False
             text_value = row.get("text")
 
-            # Avec la nouvelle config : "" reste "", cellules vides deviennent NaN
-            if pd.isnull(text_value):
-                # Vraiment null/NaN (cellule vide)
+            # Avec keep_default_na=False : cellules vides deviennent ""
+            if text_value == "" or (isinstance(text_value, str) and text_value.strip() == ""):
+                self.add_error(
+                    "empty_text", f"Texte vide", real_line, "text"
+                )
+            elif pd.isnull(text_value) or str(text_value).lower() == "nan":
+                # Cas vraiment rares avec keep_default_na=False
                 self.add_error(
                     "missing_text", f"Texte manquant", real_line, "text"
                 )
-            elif text_value == "":
-                # Chaîne vide explicite
-                self.add_error("empty_text", f"Texte vide", real_line, "text")
-            else:
-                # Vérifier si c'est juste des espaces
-                text_str = str(text_value).strip()
-                if text_str == "" or text_str.lower() == "nan":
-                    self.add_error("empty_text", f"Texte vide", real_line, "text")
 
             # Vérification des labels
             label_value = row.get("label")
