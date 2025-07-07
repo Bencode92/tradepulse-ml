@@ -11,12 +11,10 @@ on:
       source:
         description: 'Source de données'
         required: true
-        default: 'mixed'
+        default: 'fmp'
         type: choice
         options:
-          - 'mixed'
-          - 'rss'
-          - 'newsapi'
+          - 'fmp'
           - 'placeholder'
       
       count:
@@ -28,7 +26,7 @@ on:
       days:
         description: 'Fenêtre temporelle en jours'
         required: true
-        default: '3'
+        default: '7'
         type: string
       
       force_commit:
@@ -77,10 +75,10 @@ jobs:
         python -m pip install --upgrade pip
         
         # Dépendances de base
-        pip install pandas>=2.0.0
+        pip install pandas>=2.0.0 requests
         
-        # Dépendances pour collecte avancée + ML
-        pip install feedparser requests transformers torch || echo "ML dependencies failed, will use basic labeling"
+        # Dépendances pour ML
+        pip install transformers torch || echo "ML dependencies failed, will use basic labeling"
         
         echo "✅ Dependencies installed"
 
@@ -97,20 +95,18 @@ jobs:
           echo "FORCE_COMMIT=${{ github.event.inputs.force_commit }}" >> $GITHUB_ENV
           echo "INCLUDE_TIME=${{ github.event.inputs.include_time }}" >> $GITHUB_ENV
         else
-          # Déclenchement automatique (cron) - PARAMÈTRES OPTIMISÉS
-          echo "SOURCE=mixed" >> $GITHUB_ENV
+          # Déclenchement automatique (cron) - FMP par défaut
+          echo "SOURCE=fmp" >> $GITHUB_ENV
           echo "COUNT=40" >> $GITHUB_ENV
-          echo "DAYS=3" >> $GITHUB_ENV
+          echo "DAYS=7" >> $GITHUB_ENV
           echo "FORCE_COMMIT=false" >> $GITHUB_ENV
           echo "INCLUDE_TIME=false" >> $GITHUB_ENV
         fi
         
         # Générer le nom de fichier avec la bonne timezone
         if [ "$INCLUDE_TIME" = "true" ]; then
-          # Avec suffixe horaire pour éviter les collisions
           DATASET_SUFFIX=$(TZ="Europe/Paris" date '+%Y%m%d_%H%M')
         else
-          # Date uniquement en timezone Paris
           DATASET_SUFFIX=$(TZ="Europe/Paris" date '+%Y%m%d')
         fi
         
@@ -124,59 +120,55 @@ jobs:
         echo "  Source: $SOURCE"
         echo "  Count: $COUNT" 
         echo "  Days: $DAYS"
-        echo "  Force commit: $FORCE_COMMIT"
-        echo "  Include time: $INCLUDE_TIME"
 
-    - name: 📰 Collect News Dataset with ML Labeling
+    - name: 📰 Collect News Dataset with FMP API
       id: collect
       env:
-        NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+        FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       run: |
         set -euo pipefail
         
-        echo "📰 Collecte des actualités financières + ML Labeling..."
+        echo "📰 Collecte FMP + ML Labeling..."
         echo "🔧 Paramètres: Source=$SOURCE, Count=$COUNT, Days=$DAYS"
         echo "🕐 Timezone: $TZ ($(date))"
         
         # Utiliser le suffixe généré pour le nom de fichier
         DATASET_FILE="datasets/news_${DATASET_SUFFIX}.csv"
         
-        # NOUVEAU : ML Labeling activé automatiquement pour sources réelles
-        if [ "$SOURCE" = "mixed" ] || [ "$SOURCE" = "rss" ]; then
-          echo "🤖 ML Labeling automatique activé pour source: $SOURCE"
+        # Collecte FMP avec ML automatique
+        if [ "$SOURCE" = "fmp" ]; then
+          echo "🤖 ML Labeling FMP automatique activé"
           EXTRA_ARGS="--auto-label --ml-model fallback --confidence-threshold 0.75"
         else
-          echo "📝 Mode labeling basique pour source: $SOURCE"
+          echo "📝 Mode placeholder (test)"
           EXTRA_ARGS=""
         fi
         
-        # Collecte avec paramètres optimisés
+        # Collecte avec FMP API
         if python scripts/collect_news.py \
             --source "$SOURCE" \
             --count "$COUNT" \
             --days "$DAYS" \
             --output "$DATASET_FILE" \
-            --newsapi-key "${NEWSAPI_KEY:-}" \
             $EXTRA_ARGS; then
           
-          echo "✅ Collecte réussie"
+          echo "✅ Collecte FMP réussie"
           echo "📁 Fichier cible: $DATASET_FILE"
           
           if [ -f "$DATASET_FILE" ]; then
             SAMPLE_COUNT=$(tail -n +2 "$DATASET_FILE" | wc -l)
             echo "📊 Dataset créé: $DATASET_FILE ($SAMPLE_COUNT échantillons)"
             
-            # Vérifier si un fichier JSON de métadonnées a été créé
+            # Vérifier les métadonnées JSON
             JSON_FILE="${DATASET_FILE%.csv}.json"
             if [ -f "$JSON_FILE" ]; then
-              echo "📁 Métadonnées créées: $JSON_FILE"
+              echo "📁 Métadonnées FMP créées: $JSON_FILE"
               
-              # Afficher infos ML si disponibles
               if command -v jq >/dev/null 2>&1; then
                 echo "🤖 Informations ML:"
-                jq -r 'if .auto_labeling_enabled then "  ML activé: " + (.ml_model_used // "N/A") + " (confiance: " + (.confidence_threshold // 0 | tostring) + ")" else "  ML désactivé" end' "$JSON_FILE" 2>/dev/null || echo "  (infos ML non disponibles)"
+                jq -r 'if .auto_labeling_enabled then "  ML activé: " + (.ml_model_used // "N/A") else "  ML désactivé" end' "$JSON_FILE" 2>/dev/null || echo "  (infos ML non disponibles)"
                 
-                echo "📊 Distribution labels:"
+                echo "📊 Distribution FMP:"
                 jq -r '.label_distribution | to_entries[] | "  " + .key + ": " + (.value | tostring)' "$JSON_FILE" 2>/dev/null || echo "  (distribution non disponible)"
               fi
             fi
@@ -189,11 +181,11 @@ jobs:
             exit 1
           fi
         else
-          echo "❌ Échec de la collecte"
+          echo "❌ Échec de la collecte FMP"
           echo "💡 Solutions possibles:"
+          echo "  - Vérifier FMP_API_KEY dans les secrets"
           echo "  - Vérifier la connexion internet"
-          echo "  - Tester avec 'placeholder' si RSS/NewsAPI échouent"
-          echo "  - Vérifier la clé NEWSAPI_KEY pour sources newsapi/mixed"
+          echo "  - Tester avec 'placeholder' si FMP échoue"
           echo "  - Installer les dépendances ML: pip install transformers torch"
           exit 1
         fi
@@ -211,7 +203,6 @@ jobs:
             echo "✅ Validation réussie"
           else
             echo "❌ Dataset invalide - arrêt du processus"
-            echo "💡 Vérifiez la qualité des données collectées"
             exit 1
           fi
         else
@@ -232,25 +223,25 @@ jobs:
           echo "✅ Validation basique OK"
         fi
 
-    - name: 📊 Dataset Statistics (AMÉLIORÉ)
+    - name: 📊 Dataset Statistics FMP
       if: steps.collect.outputs.dataset-created == 'true'
       run: |
         DATASET_PATH="${{ steps.collect.outputs.dataset-path }}"
         
-        echo "📊 Statistiques du dataset (avec ML):"
-        echo "====================================="
+        echo "📊 Statistiques dataset FMP:"
+        echo "=========================="
         
         # Statistiques CSV basiques
         TOTAL_LINES=$(wc -l < "$DATASET_PATH")
-        DATA_LINES=$((TOTAL_LINES - 1))  # Exclure l'en-tête
+        DATA_LINES=$((TOTAL_LINES - 1))
         
         echo "📄 Fichier: $DATASET_PATH"
         echo "📊 Échantillons: $DATA_LINES"
         echo "💾 Taille: $(du -h "$DATASET_PATH" | cut -f1)"
         echo "🕐 Créé: $(TZ='Europe/Paris' date)"
-        echo "🔧 Source: $SOURCE (fenêtre: $DAYS jours)"
+        echo "🏭 Source: FMP API ($DAYS jours)"
         
-        # Vérifier le cache de déduplication
+        # Cache déduplication
         CACHE_FILE="datasets/.article_cache.json"
         if [ -f "$CACHE_FILE" ]; then
           if command -v jq >/dev/null 2>&1; then
@@ -261,9 +252,9 @@ jobs:
           fi
         fi
         
-        # Distribution des labels avec pourcentages
+        # Distribution des labels
         echo ""
-        echo "🏷️ Distribution des labels:"
+        echo "🏷️ Distribution des labels FMP:"
         tail -n +2 "$DATASET_PATH" | cut -d',' -f2 | sort | uniq -c | while read count label; do
           if command -v bc >/dev/null 2>&1; then
             percentage=$(echo "scale=1; $count * 100 / $DATA_LINES" | bc -l)
@@ -273,17 +264,9 @@ jobs:
           fi
         done
         
-        # Vérifier la qualité (pas de doublons "Sample X:")
-        DUPLICATES=$(tail -n +2 "$DATASET_PATH" | cut -d',' -f1 | grep -c "^Sample [0-9]*:" || echo "0")
-        if [ "$DUPLICATES" -gt 0 ]; then
-          echo "⚠️ Doublons détectés: $DUPLICATES articles 'Sample X:'"
-        else
-          echo "✅ Aucun doublon 'Sample X:' détecté"
-        fi
-        
-        # Aperçu du contenu (sans headers pour éviter confusion)
+        # Aperçu du contenu
         echo ""
-        echo "👀 Aperçu du contenu:"
+        echo "👀 Aperçu contenu FMP:"
         tail -n +2 "$DATASET_PATH" | head -3
 
     - name: 📝 Smart Commit and Push
@@ -302,56 +285,38 @@ jobs:
         TODAY=$(TZ='Europe/Paris' date '+%Y-%m-%d')
         FULL_TIMESTAMP=$(TZ='Europe/Paris' date '+%Y-%m-%d %H:%M:%S %Z')
         
-        # Diagnostic AVANT git add
-        echo "🔍 Diagnostic Git AVANT git add:"
-        echo "  Working directory status:"
-        git status --porcelain | head -10 || true
-        echo "  Dataset file exists: $([ -f "$DATASET_PATH" ] && echo "✅ YES" || echo "❌ NO")"
-        if [ -f "$DATASET_PATH" ]; then
-          echo "  Dataset file size: $(wc -l < "$DATASET_PATH") lines"
-        fi
-        
-        # Ajouter seulement le fichier CSV (pas de JSON par défaut)
+        # Ajouter les fichiers
         echo "🔧 Executing: git add $DATASET_PATH"
         git add "$DATASET_PATH"
         
-        # Ajouter le cache de déduplication s'il existe
+        # Ajouter le cache si présent
         if [ -f "datasets/.article_cache.json" ]; then
           git add datasets/.article_cache.json
           echo "🗄️ Cache de déduplication ajouté"
         fi
         
-        # Diagnostic APRÈS git add
-        echo ""
-        echo "🔍 Diagnostic Git APRÈS git add:"
-        echo "  Staged files:"
-        git diff --staged --name-only | head -10 || true
-        
-        # Vérifier s'il y a des changements
+        # Vérifier changements
         HAS_CHANGES=false
         if ! git diff --staged --quiet; then
           HAS_CHANGES=true
-          echo "✅ Changements détectés dans l'index Git"
-          echo "📋 Fichiers à committer:"
-          git diff --staged --name-only || true
+          echo "✅ Changements détectés"
         else
-          echo "⚠️ AUCUN changement détecté dans l'index Git"
+          echo "⚠️ Aucun changement détecté"
         fi
         
-        # Décider du commit selon la logique
+        # Commit selon la logique
         if [ "$HAS_CHANGES" = "true" ]; then
-          # Commit normal avec infos ML
           COMMIT_MSG=$(cat <<EOF
-        📰 Add daily news dataset with ML labeling ($TODAY)
+        📰 Add FMP financial news dataset with ML labeling ($TODAY)
 
         📊 Dataset details:
         - File: $DATASET_PATH
         - Samples: $SAMPLE_COUNT
-        - Source: $SOURCE (fenêtre: $DAYS jours)
+        - Source: FMP API (fenêtre: $DAYS jours)
         - Generated: $FULL_TIMESTAMP
-        - ML Labeling: $([ "$SOURCE" = "mixed" ] || [ "$SOURCE" = "rss" ] && echo "✅ Enabled (FinBERT)" || echo "❌ Disabled")
+        - ML Labeling: ✅ Enabled (FinBERT)
 
-        🤖 Auto-generated by Daily News Collection workflow v2
+        🤖 Auto-generated by FMP News Collection workflow
         EOF
         )
           
@@ -359,16 +324,13 @@ jobs:
           echo "✅ Commit effectué avec changements"
           
         elif [ "$FORCE_COMMIT" = "true" ]; then
-          # Commit forcé
-          COMMIT_MSG="🔄 Forced dataset update ($TODAY) - regenerated"
+          COMMIT_MSG="🔄 Forced FMP dataset update ($TODAY)"
           git commit -m "$COMMIT_MSG" --allow-empty
           echo "🔄 Commit forcé effectué"
           
         else
-          # Pas de changements
-          echo "🔄 Pas de changements et force_commit=false → skip commit"
-          echo "💡 Le dataset existe déjà et est identique"
-          echo "✅ Workflow terminé avec succès (pas de commit nécessaire)"
+          echo "🔄 Pas de changements → skip commit"
+          echo "✅ Workflow terminé avec succès"
           exit 0
         fi
         
@@ -379,10 +341,10 @@ jobs:
         echo "🚀 Pushing to repository..."
         git push
         
-        echo "✅ Dataset committed and pushed successfully"
+        echo "✅ Dataset FMP committed and pushed successfully"
         echo "🔄 This will trigger validation and fine-tuning workflows"
 
-    - name: 📝 Create Summary Comment (ML INFO)
+    - name: 📝 Create Summary Comment (FMP Edition)
       if: always() && github.event_name == 'workflow_dispatch'
       uses: actions/github-script@v7
       with:
@@ -401,24 +363,22 @@ jobs:
             emoji = '✅';
             statusText = 'SUCCESS';
             
-            const mlEnabled = source === 'mixed' || source === 'rss';
-            
-            message = `🎉 Dataset créé avec succès + ML Labeling !
+            message = `🎉 Dataset FMP créé avec succès + ML Labeling !
             
             **📊 Détails du dataset:**
             - 📄 Fichier: \`${datasetPath}\`
             - 📊 Échantillons: ${sampleCount}
-            - 🔗 Source: ${source}
+            - 🏭 Source: Financial Modeling Prep API
             - 📅 Fenêtre temporelle: ${days} jours
-            - 🤖 ML Labeling: ${mlEnabled ? '✅ Activé (FinBERT)' : '❌ Désactivé'}
+            - 🤖 ML Labeling: ✅ Activé (FinBERT)
             - 🕐 Timezone: Europe/Paris
             
-            **🔥 Améliorations appliquées:**
-            - ✅ Déduplication améliorée (plus de "Sample X:" en doublon)
-            - ✅ ML Labeling automatique pour sources réelles
-            - ✅ Fallback intelligent si RSS/API échouent
-            - ✅ Cache persistant pour éviter répétitions
-            - ✅ CSV simplifié (text, label) compatible
+            **🔥 Avantages FMP:**
+            - ✅ Sources financières premium (Bloomberg, Reuters, WSJ)
+            - ✅ 5 endpoints spécialisés (stock, crypto, forex, etc.)
+            - ✅ Pagination intelligente par intervalles
+            - ✅ Déduplication avancée
+            - ✅ ML Labeling automatique
             
             **🔄 Prochaines étapes:**
             1. 🔍 Validation automatique déclenchée
@@ -427,30 +387,30 @@ jobs:
           } else {
             emoji = '❌';
             statusText = 'FAILED';
-            message = `🚨 Échec de la collecte de dataset.
+            message = `🚨 Échec de la collecte FMP.
             
             **⚠️ Problème détecté:**
             - Status: ${status}
             - Dataset créé: ${datasetCreated}
             
             **🔧 Actions suggérées:**
-            1. Vérifier les logs du workflow
-            2. Tester localement: \`python scripts/collect_news.py --source mixed --count 30\`
-            3. Vérifier dépendances: \`pip install feedparser requests transformers torch\`
+            1. Vérifier FMP_API_KEY dans les secrets
+            2. Tester localement: \`python scripts/collect_news.py --source fmp --count 20\`
+            3. Vérifier dépendances: \`pip install requests transformers torch\`
             4. Test fallback: \`python scripts/collect_news.py --source placeholder\``;
           }
           
-          const commentBody = `## ${emoji} Daily News Collection + ML Labeling - ${statusText}
+          const commentBody = `## ${emoji} FMP News Collection + ML Labeling - ${statusText}
           
           ${message}
           
           ### 🔗 Liens utiles
           - 📊 [Workflow complet](${runUrl})
-          - 🤖 Script ML: \`scripts/collect_news.py\` (version améliorée)
+          - 🏭 Script FMP: \`scripts/collect_news.py\` (Financial Modeling Prep)
           - 📖 [Guide des datasets](DATASET_WORKFLOW.md)
           
           ---
-          *🤖 Collecte automatique avec ML Labeling FinBERT activé*
+          *🤖 Collecte FMP automatique avec ML Labeling FinBERT*
           `;
           
           console.log('Workflow summary:', commentBody);
@@ -469,44 +429,46 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
-          const issueBody = `# 🚨 Échec de la collecte quotidienne + ML
+          const issueBody = `# 🚨 Échec de la collecte FMP quotidienne
 
-          La collecte automatique avec ML labeling du ${new Date().toISOString().split('T')[0]} a échoué.
+          La collecte automatique FMP + ML du ${new Date().toISOString().split('T')[0]} a échoué.
 
           ## 📊 Détails
-          - **Workflow:** Daily News Collection + ML Labeling
+          - **Workflow:** FMP News Collection + ML Labeling
+          - **Source:** Financial Modeling Prep API
           - **Trigger:** Scheduled (cron)
           - **Timestamp:** ${new Date().toISOString()}
           - **Run ID:** ${context.runId}
 
           ## 🔗 Liens
           - [Workflow failed](${context.payload.repository.html_url}/actions/runs/${context.runId})
-          - [Script collecte ML](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
+          - [Script FMP](${context.payload.repository.html_url}/blob/main/scripts/collect_news.py)
 
           ## 🔧 Actions suggérées
-          1. Vérifier les logs du workflow
-          2. Tester collecte + ML: \`python scripts/collect_news.py --source mixed --auto-label\`
+          1. Vérifier FMP_API_KEY dans les secrets Actions
+          2. Tester collecte FMP: \`python scripts/collect_news.py --source fmp --count 20\`
           3. Vérifier dépendances ML: \`pip install transformers torch\`
-          4. Test sans ML: \`python scripts/collect_news.py --source mixed\`
-          5. Vérifier sources RSS/NewsAPI
+          4. Test sans ML: \`python scripts/collect_news.py --source fmp --days 3\`
+          5. Vérifier endpoints FMP API
 
-          ## 🤖 Test ML Local
+          ## 🤖 Test FMP Local
           \`\`\`bash
           # Test complet avec ML
-          python scripts/collect_news.py --source mixed --count 20 --auto-label --ml-model fallback
+          export FMP_API_KEY="your_key"
+          python scripts/collect_news.py --source fmp --count 20 --auto-label --ml-model fallback
           
           # Test simple sans ML
-          python scripts/collect_news.py --source rss --count 15
+          python scripts/collect_news.py --source fmp --count 10 --days 3
           \`\`\`
 
           ---
-          *Issue créée automatiquement par le système de monitoring ML*
+          *Issue créée automatiquement par le système de monitoring FMP*
           `;
 
           await github.rest.issues.create({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            title: `🚨 Échec collecte ML ${new Date().toISOString().split('T')[0]}`,
+            title: `🚨 Échec collecte FMP ${new Date().toISOString().split('T')[0]}`,
             body: issueBody,
-            labels: ['bug', 'automation', 'dataset-collection', 'ml-labeling']
+            labels: ['bug', 'automation', 'fmp-collection', 'ml-labeling']
           });
