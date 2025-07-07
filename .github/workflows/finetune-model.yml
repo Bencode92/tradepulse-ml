@@ -1,11 +1,5 @@
 name: 🤖 TradePulse FinBERT Fine-tuning
 
-# Ajouter les permissions nécessaires
-permissions:
-  contents: write
-  packages: write
-  releases: write
-
 on:
   # Déclenchement manuel avec paramètres
   workflow_dispatch:
@@ -148,7 +142,7 @@ jobs:
       with:
         lfs: true
         fetch-depth: 2      # ← FIX: garantit que HEAD~1 existe
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.GH_TOKEN }}
 
     - name: 🐍 Setup Python 3.9
       uses: actions/setup-python@v4
@@ -573,7 +567,6 @@ jobs:
     - name: 🚀 Create GitHub Release
       uses: actions/github-script@v7
       with:
-        github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
           const modelName = '${{ needs.finetune.outputs.model-name }}';
           const hfModelId = '${{ needs.finetune.outputs.hf-model-id }}';
