@@ -1,18 +1,8 @@
 # Configuration pre-commit pour TradePulse ML
-# Synchronisé avec la CI GitHub Actions
+# Synchronisé avec la CI GitHub Actions (sans Black)
 
 repos:
-  # 1. Black - Formatage Python (identique à la CI)
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
-      - id: black
-        args: ["--line-length=88"]
-        files: ^scripts/.*\.py$
-        name: "Black (Python formatter)"
-        description: "Format Python code with Black"
-
-  # 2. isort - Tri des imports (identique à la CI)  
+  # 1. isort - Tri des imports (identique à la CI)  
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
@@ -22,9 +12,9 @@ repos:
         name: "isort (Import sorter)"
         description: "Sort Python imports"
 
-  # 3. Ruff - Linting rapide (identique à la CI)
+  # 2. Ruff - Linting rapide (identique à la CI)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.5
+    rev: v0.3.4
     hooks:
       - id: ruff
         args: ["--fix"]
@@ -32,7 +22,7 @@ repos:
         name: "Ruff (Fast linter)"
         description: "Fast Python linter with auto-fix"
 
-  # 4. Contrôles supplémentaires utiles
+  # 3. Contrôles supplémentaires utiles
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
