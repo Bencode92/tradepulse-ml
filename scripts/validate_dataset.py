@@ -144,7 +144,7 @@ class DatasetValidator:
             return False, self._generate_report()
 
         try:
-            # CORRECTION SIMPLE ET DÉFINITIVE
+            # Configuration optimale pour distinguer "" vs cellules vides
             df = pd.read_csv(
                 csv_path,
                 keep_default_na=False,  # "" reste chaîne vide  
@@ -194,46 +194,40 @@ class DatasetValidator:
             )
 
     def _check_content_detailed(self, df: pd.DataFrame):
-        """Vérifie le contenu avec détails ligne par ligne - LOGIQUE SIMPLIFIÉE"""
-        if "text" not in df.columns or "label" not in df.columns:
-            return  # Déjà signalé dans _check_structure
+        """Vérifie le contenu avec détails ligne par ligne - LOGIQUE CORRIGÉE DÉFINITIVEMENT"""
+        if {"text", "label"} - set(df.columns):
+            return  # Colonnes manquantes déjà signalées
 
-        # Vérification des valeurs manquantes ligne par ligne
         for idx, row in df.iterrows():
-            real_line = idx + 2  # +1 pour passer à 1-based, +1 pour l'en-tête
+            line = idx + 2  # numéro réel (1-based + en-tête)
+            text_val = row["text"]
+            label_val = row["label"]
 
-            # CORRECTION SIMPLE : Logique claire pour empty vs missing
-            text_value = row.get("text")
+            # ------------------------------------------------------------------
+            # 1) Validation du label EN PREMIER
+            # ------------------------------------------------------------------
+            label_ok = True
+            if pd.isnull(label_val) or str(label_val).strip() == "":
+                self.add_error("missing_label", "Label manquant", line, "label")
+                label_ok = False
+            elif not RE_LABEL.match(str(label_val).strip()):
+                self.add_error(
+                    "invalid_label",
+                    f"Label invalide: '{label_val}' (doit être positive/negative/neutral)",
+                    line,
+                    "label",
+                )
+                label_ok = False
 
-            if pd.isnull(text_value):
-                # Cellule vraiment vide → missing_text
-                self.add_error(
-                    "missing_text", f"Texte manquant", real_line, "text"
-                )
-            elif isinstance(text_value, str) and text_value.strip() == "":
-                # Chaîne vide explicite "" ou espaces → empty_text
-                self.add_error("empty_text", f"Texte vide", real_line, "text")
-
-            # Vérification des labels
-            label_value = row.get("label")
-            if pd.isnull(label_value):
-                self.add_error(
-                    "missing_label", f"Label manquant", real_line, "label"
-                )
-            elif isinstance(label_value, str) and label_value.strip() == "":
-                self.add_error(
-                    "missing_label", f"Label vide", real_line, "label"
-                )
-            else:
-                label_str = str(label_value).strip()
-                if not RE_LABEL.match(label_str):
-                    self.add_error(
-                        "invalid_label",
-                        f"Label invalide: '{label_value}' "
-                        f"(doit être positive/negative/neutral)",
-                        real_line,
-                        "label",
-                    )
+            # ------------------------------------------------------------------
+            # 2) Validation du texte
+            #    Ne signaler missing_text QUE si le label est valide
+            # ------------------------------------------------------------------
+            if pd.isnull(text_val):
+                if label_ok:  # <- CORRECTION CLEF : seulement si label OK
+                    self.add_error("missing_text", "Texte manquant", line, "text")
+            elif isinstance(text_val, str) and text_val.strip() == "":
+                self.add_error("empty_text", "Texte vide", line, "text")
 
         # Détection des doublons avec numéros de ligne
         if "text" in df.columns:
