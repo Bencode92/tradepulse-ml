@@ -1,14 +1,14 @@
 {
   "filename": "news_20250707.csv",
-  "created_at": "2025-07-07T13:33:18.840270+02:00",
-  "source": "placeholder",
-  "article_count": 13,
+  "created_at": "2025-07-07T13:42:35.744148+02:00",
+  "source": "mixed",
+  "article_count": 30,
   "days_range": 3,
   "label_distribution": {
-    "positive": 5,
-    "negative": 4,
-    "neutral": 4
+    "negative": 5,
+    "neutral": 18,
+    "positive": 7
   },
   "deduplication_enabled": true,
-  "cache_size": 0
+  "cache_size": 18
 }
