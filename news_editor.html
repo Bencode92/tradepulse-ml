@@ -9,15 +9,16 @@
   </head>
   <body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
     <div class="max-w-7xl mx-auto space-y-6">
-      <!-- Header avec style moderne -->
+      <!-- Header avec debug info -->
       <div class="text-center py-8">
         <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
           📰 TradePulse
         </h1>
         <p class="text-xl text-gray-300 mt-2">News Dataset Editor & GitHub Sync</p>
+        <div id="debugInfo" class="text-sm text-yellow-400 mt-2 bg-black/20 p-2 rounded"></div>
       </div>
 
-      <!-- GitHub config avec design amélioré -->
+      <!-- GitHub config -->
       <details class="bg-white/10 backdrop-blur-lg rounded-xl shadow-2xl border border-white/20 p-6">
         <summary class="cursor-pointer text-lg font-medium select-none text-white flex items-center gap-2">
           <span class="text-2xl">🔧</span> Connexion GitHub
@@ -54,7 +55,7 @@
         </div>
       </details>
 
-      <!-- Actions bar avec design moderne -->
+      <!-- Actions bar -->
       <div class="flex flex-wrap gap-4 items-center bg-white/10 backdrop-blur-lg p-6 rounded-xl shadow-2xl border border-white/20">
         <label class="inline-flex items-center gap-2 cursor-pointer">
           <input id="fileInput" type="file" accept=".csv" class="hidden" />
@@ -74,7 +75,7 @@
         <span id="status" class="text-sm text-gray-300 ml-auto flex items-center"></span>
       </div>
 
-      <!-- Statistiques du dataset avec importance -->
+      <!-- Statistiques CORRIGÉES -->
       <div id="statsPanel" class="hidden grid md:grid-cols-7 gap-4">
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-blue-400" id="totalRows">0</div>
@@ -93,7 +94,7 @@
           <div class="text-2xl font-bold text-gray-400" id="neutralCount">0</div>
           <div class="text-sm text-gray-300">Neutres</div>
         </div>
-        <!-- Stats importance -->
+        <!-- Stats importance CORRIGÉES -->
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-red-400" id="critiqueCount">0</div>
           <div class="text-sm text-gray-300">Critiques</div>
@@ -108,7 +109,7 @@
         </div>
       </div>
 
-      <!-- Table container avec design amélioré -->
+      <!-- Table container -->
       <div id="tableWrapper" class="overflow-x-auto rounded-xl shadow-2xl bg-white/10 backdrop-blur-lg border border-white/20"></div>
 
       <!-- Messages de validation -->
@@ -119,19 +120,47 @@
     </div>
 
     <script>
-      // Table de couleurs pour les labels
+      // 🎯 COULEURS CORRIGÉES
       const labelColors = {
         positive: 'text-green-400',
         neutral:  'text-gray-400',
         negative: 'text-red-400'
       };
 
-      // 🎯 NOUVEAU : Couleurs pour l'importance
       const importanceColors = {
         critique: 'text-red-400',
         importante: 'text-yellow-400', 
         générale: 'text-green-400'
       };
+
+      // 🔧 DEBUG: Fonction pour afficher l'état
+      function updateDebugInfo() {
+        const debug = document.getElementById('debugInfo');
+        if (!rows.length) {
+          debug.textContent = 'Aucune donnée chargée';
+          return;
+        }
+
+        const hasImportance = headers.includes('importance');
+        const sentimentDist = {};
+        const importanceDist = {};
+        
+        rows.forEach(row => {
+          const label = (row.label || 'neutral').toLowerCase();
+          const importance = (row.importance || 'générale').toLowerCase();
+          
+          sentimentDist[label] = (sentimentDist[label] || 0) + 1;
+          if (hasImportance) {
+            importanceDist[importance] = (importanceDist[importance] || 0) + 1;
+          }
+        });
+
+        let text = `📊 ${rows.length} lignes | Sentiment: ${JSON.stringify(sentimentDist)}`;
+        if (hasImportance) {
+          text += ` | Importance: ${JSON.stringify(importanceDist)}`;
+        }
+        debug.textContent = text;
+      }
 
       const qs = id => document.getElementById(id);
       const fileInput = qs('fileInput');
@@ -158,7 +187,7 @@
       let currentFilename = '';
       let currentSha = null;
 
-      // ----------------- Validation locale -----------------
+      // 🎯 VALIDATION CORRIGÉE
       function validateDataset() {
         const issues = [];
         const stats = { positive: 0, negative: 0, neutral: 0, invalid_sentiment: 0 };
@@ -169,75 +198,59 @@
         
         if (hasImportance) requiredHeaders.push('importance');
         
-        // Vérifier colonnes requises
+        // Vérifier colonnes
         for (const header of requiredHeaders) {
           if (!headers.includes(header)) {
             issues.push(`❌ Colonne "${header}" requise`);
           }
         }
         
+        // 🔧 VALIDATION STRICTE
         rows.forEach((row, idx) => {
           if (!row.text || row.text.trim().length < 10) {
-            issues.push(`⚠️ Ligne ${idx + 1}: texte trop court (< 10 caractères)`);
+            issues.push(`⚠️ Ligne ${idx + 1}: texte trop court`);
           }
           
-          if (row.text && row.text.length > 512) {
-            issues.push(`⚠️ Ligne ${idx + 1}: texte trop long (> 512 caractères)`);
-          }
-          
-          // Validation sentiment
-          const label = row.label?.toLowerCase();
-          if (['positive', 'negative', 'neutral'].includes(label)) {
+          // Sentiment
+          const label = (row.label || '').toLowerCase();
+          const validSentiments = ['positive', 'negative', 'neutral'];
+          if (validSentiments.includes(label)) {
             stats[label]++;
           } else {
             stats.invalid_sentiment++;
-            issues.push(`❌ Ligne ${idx + 1}: sentiment invalide "${row.label}"`);
+            issues.push(`❌ Ligne ${idx + 1}: sentiment "${row.label}" invalide`);
           }
           
-          // 🎯 NOUVEAU : Validation importance
+          // 🎯 IMPORTANCE STRICTE
           if (hasImportance) {
-            const importance = row.importance?.toLowerCase();
-            if (['critique', 'importante', 'générale'].includes(importance)) {
+            const importance = (row.importance || '').toLowerCase();
+            const validImportance = ['critique', 'importante', 'générale'];
+            if (validImportance.includes(importance)) {
               importanceStats[importance]++;
             } else {
               importanceStats.invalid_importance++;
-              issues.push(`❌ Ligne ${idx + 1}: importance invalide "${row.importance}"`);
+              issues.push(`❌ Ligne ${idx + 1}: importance "${row.importance}" invalide`);
             }
           }
         });
         
-        // Vérifier équilibrage sentiment
-        const total = rows.length;
-        const maxPercent = Math.max(stats.positive, stats.negative, stats.neutral) / total;
-        if (maxPercent > 0.7) {
-          issues.push(`⚠️ Dataset déséquilibré sentiment (${Math.round(maxPercent * 100)}% d'une classe)`);
-        }
-        
-        // Vérifier équilibrage importance
-        if (hasImportance) {
-          const maxImportancePercent = Math.max(importanceStats.critique, importanceStats.importante, importanceStats.générale) / total;
-          if (maxImportancePercent > 0.7) {
-            issues.push(`⚠️ Dataset déséquilibré importance (${Math.round(maxImportancePercent * 100)}% d'une classe)`);
-          }
-        }
-        
-        // Afficher résultats
+        // Affichage détaillé
         let html = `<div class="grid md:grid-cols-2 gap-4">`;
         html += `<div>`;
         html += `<h4 class="font-medium text-white mb-2">📊 Statistiques</h4>`;
         html += `<ul class="space-y-1 text-sm">`;
-        html += `<li>Total: ${total} échantillons</li>`;
+        html += `<li>Total: ${rows.length} échantillons</li>`;
         html += `<li><strong>Sentiment:</strong></li>`;
-        html += `<li>• Positifs: ${stats.positive} (${Math.round(stats.positive/total*100)}%)</li>`;
-        html += `<li>• Négatifs: ${stats.negative} (${Math.round(stats.negative/total*100)}%)</li>`;
-        html += `<li>• Neutres: ${stats.neutral} (${Math.round(stats.neutral/total*100)}%)</li>`;
+        html += `<li>• Positifs: ${stats.positive} (${Math.round(stats.positive/rows.length*100)}%)</li>`;
+        html += `<li>• Négatifs: ${stats.negative} (${Math.round(stats.negative/rows.length*100)}%)</li>`;
+        html += `<li>• Neutres: ${stats.neutral} (${Math.round(stats.neutral/rows.length*100)}%)</li>`;
         if (stats.invalid_sentiment > 0) html += `<li class="text-red-400">• Invalides: ${stats.invalid_sentiment}</li>`;
         
         if (hasImportance) {
           html += `<li><strong>Importance:</strong></li>`;
-          html += `<li>• Critiques: ${importanceStats.critique} (${Math.round(importanceStats.critique/total*100)}%)</li>`;
-          html += `<li>• Importantes: ${importanceStats.importante} (${Math.round(importanceStats.importante/total*100)}%)</li>`;
-          html += `<li>• Générales: ${importanceStats.générale} (${Math.round(importanceStats.générale/total*100)}%)</li>`;
+          html += `<li>• Critiques: ${importanceStats.critique} (${Math.round(importanceStats.critique/rows.length*100)}%)</li>`;
+          html += `<li>• Importantes: ${importanceStats.importante} (${Math.round(importanceStats.importante/rows.length*100)}%)</li>`;
+          html += `<li>• Générales: ${importanceStats.générale} (${Math.round(importanceStats.générale/rows.length*100)}%)</li>`;
           if (importanceStats.invalid_importance > 0) html += `<li class="text-red-400">• Invalides: ${importanceStats.invalid_importance}</li>`;
         }
         
@@ -258,7 +271,7 @@
         return issues.length === 0;
       }
 
-      // ----------------- Statistiques -----------------
+      // 🎯 STATS CORRIGÉES
       function updateStats() {
         if (!rows.length) return;
         
@@ -266,28 +279,27 @@
         const importanceStats = { critique: 0, importante: 0, générale: 0 };
         
         rows.forEach(row => {
-          const label = row.label?.toLowerCase();
-          const importance = row.importance?.toLowerCase();
+          const label = (row.label || 'neutral').toLowerCase();
+          const importance = (row.importance || 'générale').toLowerCase();
           
           if (sentimentStats.hasOwnProperty(label)) sentimentStats[label]++;
           if (importanceStats.hasOwnProperty(importance)) importanceStats[importance]++;
         });
         
-        // Stats sentiment
         qs('totalRows').textContent = rows.length;
         qs('positiveCount').textContent = sentimentStats.positive;
         qs('negativeCount').textContent = sentimentStats.negative;
         qs('neutralCount').textContent = sentimentStats.neutral;
         
-        // 🎯 NOUVEAU : Stats importance
         qs('critiqueCount').textContent = importanceStats.critique;
         qs('importanteCount').textContent = importanceStats.importante;
         qs('généraleCount').textContent = importanceStats.générale;
         
         statsPanel.classList.remove('hidden');
+        updateDebugInfo();
       }
 
-      // ----------------- Rendu du tableau amélioré avec dropdown coloré -----------------
+      // 🎯 RENDU TABLEAU CORRIGÉ
       function renderTable() {
         if (!headers.length) return;
 
@@ -315,21 +327,20 @@
               html += `
                 <td class="px-4 py-3 ${color}">
                   <select data-row="${rIdx}" data-type="label"
-                          class="bg-transparent outline-none ${color}">
+                          class="bg-transparent outline-none ${color} font-bold">
                     <option value="positive" ${val==='positive'?'selected':''}>positive</option>
                     <option value="neutral"  ${val==='neutral'?'selected':''}>neutral</option>
                     <option value="negative" ${val==='negative'?'selected':''}>negative</option>
                   </select>
                 </td>`;
             } else if (h === 'importance') {
-              // 🎯 NOUVELLE colonne importance
               const val = (row.importance || 'générale').toLowerCase();
               const color = importanceColors[val] || 'text-gray-400';
               
               html += `
                 <td class="px-4 py-3 ${color}">
                   <select data-row="${rIdx}" data-type="importance"
-                          class="bg-transparent outline-none ${color}">
+                          class="bg-transparent outline-none ${color} font-bold">
                     <option value="critique" ${val==='critique'?'selected':''}>critique</option>
                     <option value="importante" ${val==='importante'?'selected':''}>importante</option>
                     <option value="générale" ${val==='générale'?'selected':''}>générale</option>
@@ -356,7 +367,7 @@
         html += `</tbody></table>`;
         tableWrapper.innerHTML = html;
 
-        /* --- listeners --- */
+        // 🔧 LISTENERS CORRIGÉS
         tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
           cell.addEventListener('input', () => {
             const r = +cell.dataset.row, c = cell.dataset.col;
@@ -366,30 +377,36 @@
           });
         });
 
-        // 🎯 NOUVEAU : Listeners pour les selects (label ET importance)
+        // 🎯 LISTENERS IMPORTANCE FIXES
         tableWrapper.querySelectorAll('select[data-type]').forEach(sel => {
           sel.addEventListener('change', () => {
             const r = +sel.dataset.row;
             const type = sel.dataset.type;
+            const newValue = sel.value;
             
             if (type === 'importance') {
-              rows[r].importance = sel.value;
-              // Mettre à jour couleur
-              const td = sel.parentElement;
-              td.classList.remove(...Object.values(importanceColors));
-              sel.classList.remove(...Object.values(importanceColors));
-              td.classList.add(importanceColors[sel.value]);
-              sel.classList.add(importanceColors[sel.value]);
-              statusSpan.textContent = `Ligne ${r + 1} : importance ➜ ${sel.value}`;
+              rows[r].importance = newValue;
+              // 🔧 Correction couleur immédiate
+              const colors = Object.values(importanceColors);
+              sel.classList.remove(...colors);
+              sel.parentElement.classList.remove(...colors);
+              
+              const newColor = importanceColors[newValue];
+              sel.classList.add(newColor);
+              sel.parentElement.classList.add(newColor);
+              
+              statusSpan.textContent = `Ligne ${r + 1}: importance ➜ ${newValue}`;
             } else {
-              // Sentiment (existant)
-              rows[r].label = sel.value;
-              const td = sel.parentElement;
-              td.classList.remove(...Object.values(labelColors));
-              sel.classList.remove(...Object.values(labelColors));
-              td.classList.add(labelColors[sel.value]);
-              sel.classList.add(labelColors[sel.value]);
-              statusSpan.textContent = `Ligne ${r + 1} : label ➜ ${sel.value}`;
+              rows[r].label = newValue;
+              const colors = Object.values(labelColors);
+              sel.classList.remove(...colors);
+              sel.parentElement.classList.remove(...colors);
+              
+              const newColor = labelColors[newValue];
+              sel.classList.add(newColor);
+              sel.parentElement.classList.add(newColor);
+              
+              statusSpan.textContent = `Ligne ${r + 1}: sentiment ➜ ${newValue}`;
             }
             
             updateStats();
@@ -413,7 +430,7 @@
         triggerWorkflowBtn.disabled = false;
       }
 
-      // ----------------- Événements -----------------
+      // ÉVÉNEMENTS
       fileInput.addEventListener('change', e => {
         if (e.target.files.length) parseCsvFile(e.target.files[0]);
       });
@@ -425,6 +442,18 @@
           complete: res => {
             headers = res.meta.fields; 
             rows = res.data;
+            
+            // 🔧 Nettoyage des données
+            rows = rows.map(row => {
+              if (!row.importance && headers.includes('importance')) {
+                row.importance = 'générale';
+              }
+              if (!row.label) {
+                row.label = 'neutral';
+              }
+              return row;
+            });
+            
             currentFilename = file.name; 
             currentSha = null;
             renderTable(); 
@@ -439,12 +468,12 @@
         });
       }
 
-      // 🎯 MODIFIER addRowBtn pour supporter importance
+      // 🔧 AJOUT LIGNE CORRIGÉ
       addRowBtn.addEventListener('click', () => {
         const obj = {}; 
         headers.forEach(h => {
           if (h === 'label') obj[h] = 'neutral';
-          else if (h === 'importance') obj[h] = 'générale';  // 🎯 NOUVEAU
+          else if (h === 'importance') obj[h] = 'générale';
           else obj[h] = '';
         }); 
         rows.push(obj);
@@ -472,7 +501,7 @@
         statusSpan.textContent = 'CSV téléchargé ✔️';
       });
 
-      // ----------------- GitHub helpers -----------------
+      // GitHub helpers
       async function githubRequest(path, method='GET', body=null) {
         const token = ghTokenInp.value.trim();
         const repo = ghRepoInp.value.trim();
@@ -495,7 +524,6 @@
         return res.json();
       }
 
-      // Load latest CSV from GitHub
       loadGithubBtn.addEventListener('click', async () => {
         try {
           ghStatus.textContent = '🔍 Recherche du dernier fichier...';
@@ -505,7 +533,6 @@
           const csvFiles = files.filter(f => f.type === 'file' && /\.csv$/.test(f.name));
           if (!csvFiles.length) throw new Error('Aucun fichier CSV trouvé dans datasets/');
           
-          // Trier par nom (assume format news_YYYYMMDD.csv)
           csvFiles.sort((a,b) => b.name.localeCompare(a.name));
           const latest = csvFiles[0];
           
@@ -519,6 +546,18 @@
           const res = Papa.parse(csvText, { header: true, skipEmptyLines: true });
           headers = res.meta.fields; 
           rows = res.data;
+          
+          // 🔧 Nettoyage GitHub
+          rows = rows.map(row => {
+            if (!row.importance && headers.includes('importance')) {
+              row.importance = 'générale';
+            }
+            if (!row.label) {
+              row.label = 'neutral';
+            }
+            return row;
+          });
+          
           renderTable(); 
           enableLocalBtns();
           ghStatus.textContent = `✅ ${rows.length} lignes chargées depuis GitHub (${latest.name})`;
@@ -529,7 +568,6 @@
         }
       });
 
-      // Commit back to GitHub
       pushGithubBtn.addEventListener('click', async () => {
         try {
           ghStatus.textContent = '📤 Commit en cours...';
@@ -553,7 +591,7 @@
         }
       });
 
-      // Déclencher workflow GitHub Actions
+      // Déclencher workflow
       triggerWorkflowBtn.addEventListener('click', async () => {
         try {
           ghStatus.textContent = '🚀 Déclenchement du workflow...';
@@ -577,13 +615,11 @@
         }
       });
 
-      // Initialisation simplifiée avec valeur par défaut forcée
+      // Initialisation
       document.addEventListener('DOMContentLoaded', () => {
-        // Forcer la valeur par défaut pour TradePulse
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
-        
-        console.log('Repository initialisé:', ghRepoInp.value);
-        console.log('PapaParse chargé:', typeof Papa !== 'undefined' ? '✅' : '❌');
+        updateDebugInfo();
+        console.log('🔧 Éditeur corrigé - Importance fixée');
       });
     </script>
   </body>
