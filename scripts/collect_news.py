@@ -34,6 +34,33 @@ logger = logging.getLogger("fmp-collector")
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
 
+# Configuration importance (reprend de fmp_news_updater.py)
+KEYWORD_TIERS = {
+    "high": [
+        # Chocs marché & macro
+        "crash", "collapse", "contagion", "default", "downgrade", "stagflation",
+        "recession", "sovereign risk", "yield spike", "volatility spike",
+        # Banques centrales / inflation
+        "cpi", "pce", "core inflation", "rate hike", "rate cut", "qt", "qe",
+        # Crédit & liquidité
+        "credit spread", "cds", "insolvency", "liquidity crunch",
+        # Fondamentaux entreprise
+        "profit warning", "guidance cut", "eps miss", "dividend cut",
+        # Géopolitique
+        "sanction", "embargo", "war", "conflict"
+    ],
+    "medium": [
+        "earnings beat", "eps beat", "revenue beat", "free cash flow",
+        "buyback", "merger", "acquisition", "spin-off", "ipo", "stake sale",
+        "job cuts", "strike", "production halt", "regulation", "antitrust",
+        "fine", "class action", "data breach", "rating watch",
+        "payrolls", "unemployment rate", "pmi", "ism", "consumer confidence",
+        "ppi", "housing starts"
+    ]
+}
+
+PREMIUM_SOURCES = ["bloomberg", "reuters", "financial times", "wall street journal"]
+
 # Configuration FMP
 FMP_ENDPOINTS = {
     "general_news": "https://financialmodelingprep.com/api/v3/fmp/articles",
@@ -382,58 +409,92 @@ class FMPNewsCollector:
             return None
 
     def _calculate_importance(self, article: Dict, source_type: str) -> float:
-        """Calcule un score d'importance pour l'article"""
-        content = article.get("text", "").lower()
-        title = article.get("title", "").lower()
-        
-        # Mots-clés d'impact élevé
-        high_impact = ["earnings", "fed", "inflation", "recession", "merger", "acquisition"]
-        medium_impact = ["revenue", "guidance", "analyst", "upgrade", "downgrade"]
-        
-        score = 0
-        
-        # Score basé sur les mots-clés
-        for keyword in high_impact:
-            if keyword in content:
-                score += 15
-        
-        for keyword in medium_impact:
-            if keyword in content:
-                score += 8
-        
-        # Bonus pour source premium
+        """Calcule un score d'importance basé sur fmp_news_updater.py"""
+        content = f"{article.get('title', '')} {article.get('text', '')}".lower()
         source = article.get("source", "").lower()
-        if any(premium in source for premium in ["bloomberg", "reuters", "wsj"]):
-            score += 10
         
-        # Bonus pour longueur de contenu
-        content_length = len(article.get("text", ""))
-        score += min(10, content_length / 200)
+        # 1. Scoring mots-clés selon KEYWORD_TIERS
+        high_score = sum(8 for kw in KEYWORD_TIERS["high"] if kw in content)
+        medium_score = sum(4 for kw in KEYWORD_TIERS["medium"] if kw in content)
         
-        # Bonus pour confiance ML élevée
-        if article.get("ml_confidence", 0) > 0.8:
-            score += 5
+        # Plafonnement
+        high_score = min(40, high_score)
+        medium_score = min(20, medium_score)
         
-        return min(100, score)
+        # 2. Scoring source avec premium boost
+        source_score = 5  # Base score
+        
+        # Check if source is premium
+        if any(premium in source for premium in PREMIUM_SOURCES):
+            source_score = 25  # Premium bonus
+        elif any(src in source for src in ["cnbc", "marketwatch", "barron's"]):
+            source_score = 15  # Good sources
+        
+        # 3. Scoring qualité contenu
+        title_length = len(article.get("title", ""))
+        text_length = len(article.get("text", ""))
+        
+        title_score = min(5, title_length / 20)
+        text_score = min(10, text_length / 300)
+        
+        # 4. Scoring impact avec sentiment
+        impact = article.get("label", "neutral")
+        if impact == "negative":
+            impact_score = 12  # Négatif plus impactant
+        elif impact == "positive":
+            impact_score = 8
+        else:
+            impact_score = 5
+        
+        # 5. Bonus confiance ML
+        ml_confidence = article.get("ml_confidence", 0)
+        if ml_confidence > 0.8:
+            impact_score += 4
+        
+        # Score total
+        total = high_score + medium_score + source_score + title_score + text_score + impact_score
+        
+        # Ajustements par catégorie
+        if source_type == "crypto_news":
+            total *= 0.8  # Pénalité crypto
+        elif any(kw in content for kw in ["cpi", "pce", "payrolls", "gdp"]):
+            total *= 1.2  # Bonus macro
+        elif any(kw in content for kw in ["earnings", "eps", "guidance"]):
+            total *= 1.1  # Bonus fundamentals
+        
+        return min(100, total)
 
     def save_dataset(self, articles: List[Dict], output_file: Optional[Path] = None) -> Path:
-        """Sauvegarde le dataset avec métadonnées"""
+        """Sauvegarde le dataset avec métadonnées et importance"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
 
-        # Sauvegarde CSV simple
+        # Sauvegarde CSV avec 3 colonnes : text, label, importance
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["text", "label"])
+            writer.writerow(["text", "label", "importance"])  # 3 colonnes
             
             for article in articles:
-                writer.writerow([article["text"], article["label"]])
+                # Calculer le label d'importance
+                importance_score = article.get("importance_score", 0)
+                importance_label = determine_importance_label(importance_score)
+                
+                writer.writerow([
+                    article["text"], 
+                    article["label"], 
+                    importance_label  # 3ème colonne
+                ])
 
         # Métadonnées JSON
         labels = [article["label"] for article in articles]
         label_counts = {label: labels.count(label) for label in set(labels)}
         needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
+        
+        # Stats d'importance
+        importance_labels = [determine_importance_label(article.get("importance_score", 0)) for article in articles]
+        importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
+        avg_importance_score = sum(article.get("importance_score", 0) for article in articles) / len(articles)
         
         metadata = {
             "filename": output_file.name,
@@ -441,6 +502,8 @@ class FMPNewsCollector:
             "source": "fmp",
             "article_count": len(articles),
             "label_distribution": label_counts,
+            "importance_distribution": importance_counts,  # Ajouté
+            "avg_importance_score": round(avg_importance_score, 2),  # Ajouté
             "deduplication_enabled": self.enable_cache,
             "cache_size": len(self.seen_articles),
             "auto_labeling_enabled": self.auto_label,
@@ -473,11 +536,18 @@ class FMPNewsCollector:
         if not articles:
             raise RuntimeError("Aucun article FMP collecté")
 
-        # Statistiques
+        # Statistiques sentiment
         labels = [article["label"] for article in articles]
         label_counts = {label: labels.count(label) for label in set(labels)}
         
-        logger.info(f"📊 Distribution: {label_counts}")
+        # Statistiques importance
+        importance_labels = [determine_importance_label(article.get("importance_score", 0)) for article in articles]
+        importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
+        avg_score = sum(article.get("importance_score", 0) for article in articles) / len(articles)
+        
+        logger.info(f"📊 Distribution sentiment: {label_counts}")
+        logger.info(f"🎯 Distribution importance: {importance_counts}")  # Ajouté
+        logger.info(f"📈 Score importance moyen: {avg_score:.1f}")  # Ajouté
         logger.info(f"🗄️ Cache: {len(self.seen_articles)} articles connus")
         
         if self.auto_label:
@@ -486,6 +556,16 @@ class FMPNewsCollector:
             logger.info(f"🎯 Articles haute confiance: {high_confidence_count}/{len(articles)}")
 
         return self.save_dataset(articles, output_file)
+
+
+def determine_importance_label(score: float) -> str:
+    """Convertit le score en label d'importance"""
+    if score >= 75:
+        return "critique"
+    elif score >= 50:
+        return "importante"
+    else:
+        return "générale"
 
 
 def main():
