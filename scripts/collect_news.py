@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TradePulse News Collector - FMP API Edition with ML Labeling
-==========================================================
+TradePulse News Collector - Smart Dual-Model ML Labeling
+========================================================
 
-Premium financial news collection using Financial Modeling Prep API
-with FinBERT ML labeling for sentiment analysis.
+Collecte avec double labellisation automatique:
+- Sentiment: positive/negative/neutral
+- Importance: critique/importante/générale
 
 Usage:
-    python scripts/collect_news.py --source fmp --count 60 --days 7
-    python scripts/collect_news.py --source fmp --count 40 --auto-label --ml-model fallback
+    python scripts/collect_news.py --source fmp --count 60 --days 7 --auto-label
 """
 
 import argparse
@@ -29,10 +29,17 @@ import time
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s — %(levelname)s — %(message)s"
 )
-logger = logging.getLogger("fmp-collector")
+logger = logging.getLogger("smart-collector")
 
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
+
+# 🎯 MODÈLES SPÉCIALISÉS (auto-détection workflow)
+ML_MODELS_CONFIG = {
+    "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # Modèle sentiment spécialisé
+    "importance": "Bencode92/tradepulse-finbert-importance",  # Modèle importance spécialisé
+    "fallback": "yiyanghkust/finbert-tone",                   # Fallback
+}
 
 # Configuration importance (reprend de fmp_news_updater.py)
 KEYWORD_TIERS = {
@@ -78,17 +85,11 @@ FMP_LIMITS = {
     "press_releases": 5
 }
 
-# ML Models configuration - FIXED: Utilise le modèle fixe maintenant
-ML_MODELS_CONFIG = {
-    "production": "Bencode92/tradepulse-finbert-prod",      # ✅ MODÈLE FIXE!
-    "development": "Bencode92/tradepulse-finbert-dev", 
-    "fallback": "yiyanghkust/finbert-tone",
-}
-
-class FMPNewsCollector:
+class SmartNewsCollector:
+    """Collecteur avec double ML (sentiment + importance)"""
+    
     def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, 
-                 auto_label: bool = False, ml_model: str = "fallback", 
-                 confidence_threshold: float = 0.75):
+                 auto_label: bool = False, confidence_threshold: float = 0.75):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.enable_cache = enable_cache
@@ -102,14 +103,14 @@ class FMPNewsCollector:
         
         # ML Configuration
         self.auto_label = auto_label
-        self.ml_model_name = ML_MODELS_CONFIG.get(ml_model, ml_model)
         self.confidence_threshold = confidence_threshold
-        self.ml_classifier = None
+        self.sentiment_classifier = None
+        self.importance_classifier = None
         
         self._load_cache()
         
         if self.auto_label:
-            self._load_ml_model()
+            self._load_ml_models()
 
     def _load_cache(self):
         """Charge le cache de déduplication"""
@@ -137,82 +138,110 @@ class FMPNewsCollector:
         except Exception as e:
             logger.warning(f"Erreur sauvegarde cache: {e}")
 
-    def _load_ml_model(self):
-        """Charge le modèle ML pour labelling automatique"""
+    def _load_ml_models(self):
+        """🎯 Charge les 2 modèles spécialisés (sentiment + importance)"""
         try:
             from transformers import pipeline
             import torch
             
-            logger.info(f"🤖 Chargement du modèle ML: {self.ml_model_name}")
+            hf_token = os.getenv("HF_TOKEN")
+            model_kwargs = {"token": hf_token} if hf_token else {}
+            device = 0 if torch.cuda.is_available() else -1
             
-            # Add HF token if available for custom models
-            model_kwargs = {}
-            if "Bencode92/" in self.ml_model_name and os.getenv("HF_TOKEN"):
-                model_kwargs["token"] = os.getenv("HF_TOKEN")
-                logger.info("🔑 Using HF token for custom model")
-            
-            self.ml_classifier = pipeline(
-                "text-classification",
-                model=self.ml_model_name,
-                return_all_scores=True,
-                device=0 if torch.cuda.is_available() else -1,
-                **model_kwargs
-            )
-            
-            logger.info(f"✅ Modèle ML chargé: {self.ml_model_name}")
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Échec chargement {self.ml_model_name}: {e}")
-            
-            # Fallback sur FinBERT de base
+            # 1. Modèle sentiment
             try:
-                fallback_model = ML_MODELS_CONFIG["fallback"]
-                logger.info(f"🔄 Fallback sur: {fallback_model}")
-                
-                from transformers import pipeline
-                import torch
-                
-                self.ml_classifier = pipeline(
+                logger.info(f"😊 Chargement modèle sentiment: {ML_MODELS_CONFIG['sentiment']}")
+                self.sentiment_classifier = pipeline(
                     "text-classification",
-                    model=fallback_model,
+                    model=ML_MODELS_CONFIG["sentiment"],
                     return_all_scores=True,
-                    device=0 if torch.cuda.is_available() else -1
+                    device=device,
+                    **model_kwargs
                 )
+                logger.info("✅ Modèle sentiment chargé")
+            except Exception as e:
+                logger.warning(f"⚠️ Fallback sentiment: {e}")
+                self.sentiment_classifier = pipeline(
+                    "text-classification",
+                    model=ML_MODELS_CONFIG["fallback"],
+                    return_all_scores=True,
+                    device=device
+                )
+            
+            # 2. Modèle importance
+            try:
+                logger.info(f"🎯 Chargement modèle importance: {ML_MODELS_CONFIG['importance']}")
+                self.importance_classifier = pipeline(
+                    "text-classification",
+                    model=ML_MODELS_CONFIG["importance"],
+                    return_all_scores=True,
+                    device=device,
+                    **model_kwargs
+                )
+                logger.info("✅ Modèle importance chargé")
+            except Exception as e:
+                logger.warning(f"⚠️ Pas de modèle importance, utilisation règles: {e}")
+                self.importance_classifier = None
                 
-                self.ml_model_name = fallback_model
-                logger.info(f"✅ Modèle fallback chargé: {fallback_model}")
-                
-            except Exception as e2:
-                logger.error(f"❌ Impossible de charger le modèle fallback: {e2}")
-                self.ml_classifier = None
-
-    def _predict_sentiment_ml(self, text: str) -> Tuple[str, float, bool]:
-        """Prédit le sentiment avec le modèle ML"""
-        if not self.ml_classifier:
-            return self._basic_sentiment_analysis(text), 0.5, True
-        
-        try:
-            text_truncated = text[:512]
-            results = self.ml_classifier(text_truncated)
-            best_pred = max(results[0], key=lambda x: x['score'])
-            
-            # Normalisation des labels
-            label_mapping = {
-                'POSITIVE': 'positive', 'NEGATIVE': 'negative', 'NEUTRAL': 'neutral',
-                'positive': 'positive', 'negative': 'negative', 'neutral': 'neutral',
-                'LABEL_0': 'negative', 'LABEL_1': 'neutral', 'LABEL_2': 'positive',
-            }
-            
-            raw_label = best_pred['label']
-            normalized_label = label_mapping.get(raw_label, 'neutral')
-            confidence = best_pred['score']
-            needs_review = confidence < self.confidence_threshold
-            
-            return normalized_label, confidence, needs_review
-            
         except Exception as e:
-            logger.warning(f"⚠️ Erreur prédiction ML: {e}")
-            return self._basic_sentiment_analysis(text), 0.5, True
+            logger.error(f"❌ Impossible de charger les modèles: {e}")
+            self.sentiment_classifier = None
+            self.importance_classifier = None
+
+    def _predict_dual_labels(self, text: str) -> Tuple[str, str, float, float]:
+        """🎯 Prédit sentiment ET importance avec les modèles spécialisés"""
+        text_truncated = text[:512]
+        
+        # 1. Prédiction sentiment
+        sentiment_label = "neutral"
+        sentiment_confidence = 0.5
+        
+        if self.sentiment_classifier:
+            try:
+                results = self.sentiment_classifier(text_truncated)
+                best_pred = max(results[0], key=lambda x: x['score'])
+                
+                # Normalisation labels sentiment
+                label_mapping = {
+                    'POSITIVE': 'positive', 'NEGATIVE': 'negative', 'NEUTRAL': 'neutral',
+                    'positive': 'positive', 'negative': 'negative', 'neutral': 'neutral',
+                    'LABEL_0': 'negative', 'LABEL_1': 'neutral', 'LABEL_2': 'positive',
+                }
+                
+                sentiment_label = label_mapping.get(best_pred['label'], 'neutral')
+                sentiment_confidence = best_pred['score']
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur prédiction sentiment: {e}")
+                sentiment_label = self._basic_sentiment_analysis(text)
+        else:
+            sentiment_label = self._basic_sentiment_analysis(text)
+        
+        # 2. Prédiction importance
+        importance_label = "générale"
+        importance_confidence = 0.5
+        
+        if self.importance_classifier:
+            try:
+                results = self.importance_classifier(text_truncated)
+                best_pred = max(results[0], key=lambda x: x['score'])
+                
+                # Normalisation labels importance
+                importance_mapping = {
+                    'critique': 'critique', 'importante': 'importante', 'générale': 'générale',
+                    'LABEL_0': 'générale', 'LABEL_1': 'importante', 'LABEL_2': 'critique',
+                }
+                
+                importance_label = importance_mapping.get(best_pred['label'], 'générale')
+                importance_confidence = best_pred['score']
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur prédiction importance: {e}")
+                importance_label = self._basic_importance_analysis(text)
+        else:
+            importance_label = self._basic_importance_analysis(text)
+        
+        return sentiment_label, importance_label, sentiment_confidence, importance_confidence
 
     def _basic_sentiment_analysis(self, text: str) -> str:
         """Analyse de sentiment basique"""
@@ -230,6 +259,20 @@ class FMPNewsCollector:
             return "negative"
         else:
             return "neutral"
+
+    def _basic_importance_analysis(self, text: str) -> str:
+        """🎯 Analyse d'importance basique avec mots-clés"""
+        text_lower = text.lower()
+        
+        high_score = sum(1 for kw in KEYWORD_TIERS["high"] if kw in text_lower)
+        medium_score = sum(1 for kw in KEYWORD_TIERS["medium"] if kw in text_lower)
+        
+        if high_score >= 2:
+            return "critique"
+        elif high_score >= 1 or medium_score >= 3:
+            return "importante"
+        else:
+            return "générale"
 
     def _article_hash(self, text: str) -> str:
         """Génère un hash unique pour un article"""
@@ -353,13 +396,13 @@ class FMPNewsCollector:
                 if enriched:
                     all_articles.append(enriched)
         
-        # Tri par qualité/importance
-        all_articles.sort(key=lambda x: x.get("importance_score", 0), reverse=True)
+        # Tri par qualité
+        all_articles.sort(key=lambda x: x.get("quality_score", 0), reverse=True)
         
         return all_articles[:count]
 
     def _enrich_article(self, article: Dict, source_type: str) -> Optional[Dict]:
-        """Enrichit un article avec métadonnées et sentiment"""
+        """🎯 Enrichit un article avec double labellisation"""
         try:
             title = article.get("title", "")
             content = article.get("text", "") or article.get("content", "")
@@ -379,28 +422,35 @@ class FMPNewsCollector:
                 "source_type": source_type
             }
             
-            # Analyse de sentiment
+            # 🎯 Double prédiction (sentiment + importance)
             if self.auto_label:
-                label, confidence, needs_review = self._predict_sentiment_ml(enriched["text"])
+                sentiment_label, importance_label, sent_conf, imp_conf = self._predict_dual_labels(enriched["text"])
+                
                 enriched.update({
-                    "label": label,
-                    "ml_confidence": confidence,
-                    "needs_review": needs_review,
-                    "ml_model_used": self.ml_model_name,
-                    "labeling_method": "ml_auto"
+                    "label": sentiment_label,
+                    "importance": importance_label,
+                    "sentiment_confidence": sent_conf,
+                    "importance_confidence": imp_conf,
+                    "needs_review": sent_conf < self.confidence_threshold or imp_conf < self.confidence_threshold,
+                    "sentiment_model": ML_MODELS_CONFIG["sentiment"] if self.sentiment_classifier else "rule_based",
+                    "importance_model": ML_MODELS_CONFIG["importance"] if self.importance_classifier else "rule_based",
+                    "labeling_method": "dual_ml_auto"
                 })
             else:
-                label = self._basic_sentiment_analysis(enriched["text"])
+                sentiment_label = self._basic_sentiment_analysis(enriched["text"])
+                importance_label = self._basic_importance_analysis(enriched["text"])
+                
                 enriched.update({
-                    "label": label,
-                    "ml_confidence": None,
+                    "label": sentiment_label,
+                    "importance": importance_label,
+                    "sentiment_confidence": None,
+                    "importance_confidence": None,
                     "needs_review": False,
-                    "ml_model_used": None,
-                    "labeling_method": "rule_based"
+                    "labeling_method": "rule_based_dual"
                 })
             
-            # Score d'importance
-            enriched["importance_score"] = self._calculate_importance(enriched, source_type)
+            # Score qualité global
+            enriched["quality_score"] = self._calculate_quality_score(enriched)
             
             return enriched
             
@@ -408,106 +458,71 @@ class FMPNewsCollector:
             logger.warning(f"Erreur enrichissement article: {e}")
             return None
 
-    def _calculate_importance(self, article: Dict, source_type: str) -> float:
-        """Calcule un score d'importance basé sur fmp_news_updater.py"""
-        content = f"{article.get('title', '')} {article.get('text', '')}".lower()
+    def _calculate_quality_score(self, article: Dict) -> float:
+        """Calcule un score de qualité"""
+        # Base: longueur
+        title_len = len(article.get("title", ""))
+        text_len = len(article.get("text", ""))
+        
+        score = min(20, title_len / 5) + min(30, text_len / 100)
+        
+        # Bonus confiance ML
+        if article.get("sentiment_confidence"):
+            score += article["sentiment_confidence"] * 10
+        if article.get("importance_confidence"):
+            score += article["importance_confidence"] * 10
+        
+        # Bonus source premium
         source = article.get("source", "").lower()
-        
-        # 1. Scoring mots-clés selon KEYWORD_TIERS
-        high_score = sum(8 for kw in KEYWORD_TIERS["high"] if kw in content)
-        medium_score = sum(4 for kw in KEYWORD_TIERS["medium"] if kw in content)
-        
-        # Plafonnement
-        high_score = min(40, high_score)
-        medium_score = min(20, medium_score)
-        
-        # 2. Scoring source avec premium boost
-        source_score = 5  # Base score
-        
-        # Check if source is premium
         if any(premium in source for premium in PREMIUM_SOURCES):
-            source_score = 25  # Premium bonus
-        elif any(src in source for src in ["cnbc", "marketwatch", "barron's"]):
-            source_score = 15  # Good sources
+            score += 25
         
-        # 3. Scoring qualité contenu
-        title_length = len(article.get("title", ""))
-        text_length = len(article.get("text", ""))
+        # Bonus mots-clés importants
+        text_lower = article.get("text", "").lower()
+        high_kw = sum(1 for kw in KEYWORD_TIERS["high"] if kw in text_lower)
+        score += high_kw * 5
         
-        title_score = min(5, title_length / 20)
-        text_score = min(10, text_length / 300)
-        
-        # 4. Scoring impact avec sentiment
-        impact = article.get("label", "neutral")
-        if impact == "negative":
-            impact_score = 12  # Négatif plus impactant
-        elif impact == "positive":
-            impact_score = 8
-        else:
-            impact_score = 5
-        
-        # 5. Bonus confiance ML
-        ml_confidence = article.get("ml_confidence", 0)
-        if ml_confidence > 0.8:
-            impact_score += 4
-        
-        # Score total
-        total = high_score + medium_score + source_score + title_score + text_score + impact_score
-        
-        # Ajustements par catégorie
-        if source_type == "crypto_news":
-            total *= 0.8  # Pénalité crypto
-        elif any(kw in content for kw in ["cpi", "pce", "payrolls", "gdp"]):
-            total *= 1.2  # Bonus macro
-        elif any(kw in content for kw in ["earnings", "eps", "guidance"]):
-            total *= 1.1  # Bonus fundamentals
-        
-        return min(100, total)
+        return min(100, score)
 
     def save_dataset(self, articles: List[Dict], output_file: Optional[Path] = None) -> Path:
-        """Sauvegarde le dataset avec métadonnées et importance"""
+        """🎯 Sauvegarde avec 3 colonnes: text, label, importance"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
 
-        # Sauvegarde CSV avec 3 colonnes : text, label, importance
+        # Sauvegarde CSV avec 3 colonnes
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["text", "label", "importance"])  # 3 colonnes
             
             for article in articles:
-                # Calculer le label d'importance
-                importance_score = article.get("importance_score", 0)
-                importance_label = determine_importance_label(importance_score)
-                
                 writer.writerow([
                     article["text"], 
                     article["label"], 
-                    importance_label  # 3ème colonne
+                    article["importance"]
                 ])
 
         # Métadonnées JSON
         labels = [article["label"] for article in articles]
-        label_counts = {label: labels.count(label) for label in set(labels)}
-        needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
+        importance_labels = [article["importance"] for article in articles]
         
-        # Stats d'importance
-        importance_labels = [determine_importance_label(article.get("importance_score", 0)) for article in articles]
+        label_counts = {label: labels.count(label) for label in set(labels)}
         importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
-        avg_importance_score = sum(article.get("importance_score", 0) for article in articles) / len(articles)
+        
+        needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
         
         metadata = {
             "filename": output_file.name,
             "created_at": datetime.datetime.now(PARIS_TZ).isoformat(),
-            "source": "fmp",
+            "source": "fmp_smart",
             "article_count": len(articles),
             "label_distribution": label_counts,
-            "importance_distribution": importance_counts,  # Ajouté
-            "avg_importance_score": round(avg_importance_score, 2),  # Ajouté
+            "importance_distribution": importance_counts,
             "deduplication_enabled": self.enable_cache,
             "cache_size": len(self.seen_articles),
-            "auto_labeling_enabled": self.auto_label,
-            "ml_model_used": self.ml_model_name if self.auto_label else None,
+            "dual_ml_enabled": self.auto_label,
+            "sentiment_model": ML_MODELS_CONFIG["sentiment"] if self.auto_label else None,
+            "importance_model": ML_MODELS_CONFIG["importance"] if self.auto_label else None,
             "confidence_threshold": self.confidence_threshold if self.auto_label else None,
             "high_confidence_articles": len(articles) - needs_review_count,
             "needs_review_articles": needs_review_count
@@ -520,15 +535,15 @@ class FMPNewsCollector:
         # Sauvegarde cache
         self._save_cache()
 
-        logger.info(f"✅ Dataset FMP: {output_file} ({len(articles)} échantillons)")
+        logger.info(f"✅ Dataset Smart: {output_file} ({len(articles)} échantillons)")
         return output_file
 
     def collect_and_save(self, count: int = 40, days: int = 7, output_file: Optional[Path] = None) -> Path:
-        """Pipeline complet de collecte FMP"""
-        logger.info(f"🚀 Collecte FMP: {count} articles, {days} jours")
+        """🎯 Pipeline complet de collecte Smart (sentiment + importance)"""
+        logger.info(f"🚀 Collecte Smart: {count} articles, {days} jours")
         
         if self.auto_label:
-            logger.info(f"🤖 ML labeling activé: {self.ml_model_name}")
+            logger.info(f"🎯 Double ML activé: sentiment + importance")
 
         # Collecte
         articles = self.collect_fmp_news(count, days)
@@ -536,18 +551,15 @@ class FMPNewsCollector:
         if not articles:
             raise RuntimeError("Aucun article FMP collecté")
 
-        # Statistiques sentiment
+        # Statistiques
         labels = [article["label"] for article in articles]
-        label_counts = {label: labels.count(label) for label in set(labels)}
+        importance_labels = [article["importance"] for article in articles]
         
-        # Statistiques importance
-        importance_labels = [determine_importance_label(article.get("importance_score", 0)) for article in articles]
+        label_counts = {label: labels.count(label) for label in set(labels)}
         importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
-        avg_score = sum(article.get("importance_score", 0) for article in articles) / len(articles)
         
         logger.info(f"📊 Distribution sentiment: {label_counts}")
-        logger.info(f"🎯 Distribution importance: {importance_counts}")  # Ajouté
-        logger.info(f"📈 Score importance moyen: {avg_score:.1f}")  # Ajouté
+        logger.info(f"🎯 Distribution importance: {importance_counts}")
         logger.info(f"🗄️ Cache: {len(self.seen_articles)} articles connus")
         
         if self.auto_label:
@@ -558,20 +570,10 @@ class FMPNewsCollector:
         return self.save_dataset(articles, output_file)
 
 
-def determine_importance_label(score: float) -> str:
-    """Convertit le score en label d'importance"""
-    if score >= 75:
-        return "critique"
-    elif score >= 50:
-        return "importante"
-    else:
-        return "générale"
-
-
 def main():
-    parser = argparse.ArgumentParser(description="FMP News Collector with ML Labeling")
+    parser = argparse.ArgumentParser(description="Smart News Collector with Dual ML Labeling")
     
-    parser.add_argument("--source", choices=["fmp"], default="fmp", help="Source FMP (défaut)")
+    parser.add_argument("--source", choices=["fmp"], default="fmp", help="Source FMP")
     parser.add_argument("--count", type=int, default=40, help="Nombre d'articles")
     parser.add_argument("--days", type=int, default=7, help="Fenêtre temporelle en jours")
     parser.add_argument("--output", type=Path, help="Fichier de sortie")
@@ -579,9 +581,7 @@ def main():
     parser.add_argument("--no-cache", action="store_true", help="Désactiver déduplication")
     
     # Arguments ML
-    parser.add_argument("--auto-label", action="store_true", help="Activer ML labeling")
-    parser.add_argument("--ml-model", choices=["production", "development", "fallback"], 
-                       default="fallback", help="Modèle ML")
+    parser.add_argument("--auto-label", action="store_true", help="Activer double ML labeling")
     parser.add_argument("--confidence-threshold", type=float, default=0.75, 
                        help="Seuil de confiance ML")
 
@@ -593,11 +593,10 @@ def main():
         return 1
 
     try:
-        collector = FMPNewsCollector(
+        collector = SmartNewsCollector(
             output_dir=args.output_dir,
             enable_cache=not args.no_cache,
             auto_label=args.auto_label,
-            ml_model=args.ml_model,
             confidence_threshold=args.confidence_threshold
         )
 
@@ -607,15 +606,15 @@ def main():
             output_file=args.output
         )
 
-        print(f"✅ Dataset FMP généré: {output_file}")
-        print(f"🔄 Déduplication: {'activée' if not args.no_cache else 'désactivée'}")
+        print(f"✅ Dataset Smart généré: {output_file}")
+        print(f"🎯 Colonnes: text, label (sentiment), importance")
         
         if args.auto_label:
-            print(f"🤖 ML Labeling: {args.ml_model}")
+            print(f"🤖 Double ML: sentiment + importance")
         
         print("\n🚀 Prochaines étapes:")
-        print(f"  1. Valider: python scripts/validate_dataset.py")
-        print(f"  2. Pipeline: python unified_pipeline.py")
+        print(f"  1. Éditer: open news_editor.html")
+        print(f"  2. Commit: déclenche auto-training dual")
 
     except Exception as e:
         logger.error(f"❌ Erreur: {e}")
