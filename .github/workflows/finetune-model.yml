@@ -1,4 +1,4 @@
-name: 🤖 TradePulse FinBERT - Modèle Unique Incrémental
+name: 🤖 TradePulse FinBERT - Auto-Detection Multi-Modèles
 
 # 🔐 PERMISSIONS REQUISES POUR RELEASES
 permissions:
@@ -60,9 +60,9 @@ on:
     branches: [main]
 
 env:
-  # 🎯 MODÈLE FIXE - Plus de noms aléatoires !
-  PRODUCTION_MODEL: "Bencode92/tradepulse-finbert-prod"
-  DEVELOPMENT_MODEL: "Bencode92/tradepulse-finbert-dev"
+  # 🎯 MODÈLES SPÉCIALISÉS - Auto-détection
+  SENTIMENT_MODEL: "Bencode92/tradepulse-finbert-sentiment"
+  IMPORTANCE_MODEL: "Bencode92/tradepulse-finbert-importance" 
   FALLBACK_MODEL: "yiyanghkust/finbert-tone"
 
 jobs:
@@ -143,10 +143,10 @@ jobs:
     if: needs.check-prerequisites.outputs.should-run == 'true'
     
     outputs:
-      model-path: ${{ steps.training.outputs.model-path }}
-      final-model-id: ${{ steps.training.outputs.final-model-id }}
-      training-metrics: ${{ steps.training.outputs.training-metrics }}
-      model-updated: ${{ steps.training.outputs.model-updated }}
+      models-trained: ${{ steps.training.outputs.models-trained }}
+      sentiment-updated: ${{ steps.training.outputs.sentiment-updated }}
+      importance-updated: ${{ steps.training.outputs.importance-updated }}
+      training-strategy: ${{ steps.detect.outputs.training-strategy }}
 
     steps:
     - name: 📥 Checkout Repository
@@ -162,47 +162,26 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
-    - name: 🔧 Smart Configuration for Fixed Model
+    - name: 🔧 Smart Configuration
       id: config
       run: |
         set -euo pipefail
         
-        # Déterminer le modèle cible selon le mode
+        # Déterminer le dataset
         TRAINING_MODE="${{ needs.check-prerequisites.outputs.training-mode }}"
         
-        if [ "$TRAINING_MODE" = "test" ]; then
-          TARGET_MODEL="test-model"
-          PUSH_TO_HUB="false"
-          echo "🧪 Mode test - pas de push vers HuggingFace"
-        elif [ "$TRAINING_MODE" = "incremental" ]; then
-          TARGET_MODEL="$PRODUCTION_MODEL"
-          PUSH_TO_HUB="true"
-          echo "🔄 Mode incrémental - amélioration du modèle de production"
-        elif [ "$TRAINING_MODE" = "fresh" ]; then
-          TARGET_MODEL="$PRODUCTION_MODEL"
-          PUSH_TO_HUB="true"
-          echo "🆕 Mode fresh - repartir du modèle de base"
-        else
-          echo "❌ Mode de training inconnu: $TRAINING_MODE"
-          exit 1
-        fi
-        
-        # Déterminer le dataset
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
           MANUAL_DATASET="${{ github.event.inputs.dataset }}"
           
           if [ "$MANUAL_DATASET" = "auto-latest" ]; then
-            echo "🔍 Auto-selecting latest dataset..."
             LATEST_CSV=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
             if [ -z "$LATEST_CSV" ]; then
               echo "❌ No CSV files found in datasets/"
               exit 1
             fi
             DATASET="$LATEST_CSV"
-            echo "📊 Auto-selected dataset: $LATEST_CSV"
           else
             DATASET="$MANUAL_DATASET"
-            echo "📊 Manual dataset: $MANUAL_DATASET"
           fi
           
           EPOCHS="${{ github.event.inputs.epochs }}"
@@ -210,8 +189,6 @@ jobs:
           FORCE_UPDATE="${{ github.event.inputs.force_update }}"
         else
           # Auto-trigger: sélectionner le dernier dataset modifié
-          echo "🔄 Auto-trigger mode: selecting latest dataset..."
-          
           DATASET_FILE=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
           if [ -z "$DATASET_FILE" ]; then
             echo "❌ No suitable dataset found"
@@ -227,51 +204,33 @@ jobs:
         # Export des variables
         {
           echo "DATASET=$DATASET"
-          echo "TARGET_MODEL=$TARGET_MODEL"
-          echo "PUSH_TO_HUB=$PUSH_TO_HUB"
           echo "EPOCHS=$EPOCHS"
           echo "LEARNING_RATE=$LEARNING_RATE"
           echo "FORCE_UPDATE=$FORCE_UPDATE"
           echo "TRAINING_MODE=$TRAINING_MODE"
         } >> "$GITHUB_ENV"
         
-        echo ""
-        echo "🔧 Configuration finale pour modèle fixe:"
-        echo "  Trigger: ${{ github.event_name }} (${{ needs.check-prerequisites.outputs.trigger-reason }})"
+        echo "🔧 Configuration:"
         echo "  Dataset: $DATASET"
-        echo "  Target Model: $TARGET_MODEL"
         echo "  Training Mode: $TRAINING_MODE"
-        echo "  Push to Hub: $PUSH_TO_HUB"
         echo "  Epochs: $EPOCHS"
         echo "  Learning Rate: $LEARNING_RATE"
-        echo "  Force Update: $FORCE_UPDATE"
 
     - name: 📦 Install Dependencies
       run: |
         set -euo pipefail
         
         python -m pip install --upgrade pip
-        pip cache purge
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         pip install "transformers[torch]==4.41.0" datasets==2.19.1 accelerate==0.30.1 evaluate==0.4.2
         pip install scikit-learn==1.4.2 pandas==2.2.2 numpy==1.26.4
         pip install huggingface_hub==0.23.0 tensorboard==2.16.2
         
         if [ -f requirements.txt ]; then
-          echo "📋 Installing additional requirements..."
           pip install -r requirements.txt
         fi
-        
-        # Vérifications de version
-        python - <<'PY'
-        import transformers, torch, datasets
-        print(f"✅ Transformers: {transformers.__version__}")
-        print(f"✅ PyTorch: {torch.__version__}")
-        print(f"✅ Datasets: {datasets.__version__}")
-        PY
 
     - name: 🔐 Setup HuggingFace Token
-      if: env.PUSH_TO_HUB == 'true'
       env:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
       run: |
@@ -279,15 +238,11 @@ jobs:
         
         if [ -z "$HF_TOKEN" ]; then
           echo "❌ HF_TOKEN required for model updates"
-          echo "💡 Add HF_TOKEN to repository secrets in Settings > Secrets"
           exit 1
         fi
         
         huggingface-cli login --token "$HF_TOKEN"
         echo "✅ HuggingFace authentication successful"
-        
-        # Vérification de l'authentification
-        huggingface-cli whoami
 
     - name: 🔍 Validate Dataset Quality
       run: |
@@ -301,12 +256,7 @@ jobs:
           exit 1
         fi
         
-        echo "✅ Dataset file found: $DATASET_FILE"
-        echo "📊 File size: $(du -h "$DATASET_FILE" | cut -f1)"
-        
-        # Validation avec le script existant
         if [ -f "scripts/validate_dataset.py" ]; then
-          echo "🔍 Running comprehensive validation..."
           if python scripts/validate_dataset.py "$DATASET_FILE" --output-json "pre_training_validation.json"; then
             echo "✅ Dataset validation passed!"
           else
@@ -315,207 +265,275 @@ jobs:
           fi
         fi
 
-    - name: 🤖 Run Incremental Fine-tuning
+    - name: 🧠 Smart Column Detection & Training Strategy
+      id: detect
+      run: |
+        set -euo pipefail
+        
+        # Créer le script d'auto-détection
+        cat > scripts/auto_detect_columns.py << 'EOF'
+        #!/usr/bin/env python3
+        import pandas as pd
+        import json
+        import sys
+        from pathlib import Path
+        
+        def detect_training_columns(dataset_path):
+            if dataset_path.suffix.lower() == '.csv':
+                df = pd.read_csv(dataset_path)
+            else:
+                df = pd.read_json(dataset_path)
+            
+            columns = set(df.columns.str.lower())
+            has_label = 'label' in columns
+            has_importance = 'importance' in columns
+            sample_size = len(df)
+            
+            if has_label and has_importance and sample_size >= 30:
+                strategy = 'dual_model'
+                models = [
+                    {'target': 'sentiment', 'column': 'label'},
+                    {'target': 'importance', 'column': 'importance'}
+                ]
+            elif has_label:
+                strategy = 'sentiment_only'
+                models = [{'target': 'sentiment', 'column': 'label'}]
+            elif has_importance:
+                strategy = 'importance_only'
+                models = [{'target': 'importance', 'column': 'importance'}]
+            else:
+                strategy = 'error'
+                models = []
+            
+            return {
+                'strategy': strategy,
+                'models': models,
+                'sample_size': sample_size,
+                'has_label': has_label,
+                'has_importance': has_importance
+            }
+        
+        if __name__ == "__main__":
+            result = detect_training_columns(Path(sys.argv[1]))
+            print(json.dumps(result))
+        EOF
+        
+        DATASET_FILE="datasets/$DATASET"
+        echo "🧠 Analyzing dataset structure: $DATASET_FILE"
+        
+        # Analyser le dataset
+        DETECTION_RESULT=$(python scripts/auto_detect_columns.py "$DATASET_FILE")
+        echo "$DETECTION_RESULT" > training_strategy.json
+        
+        STRATEGY=$(echo "$DETECTION_RESULT" | jq -r '.strategy')
+        MODELS_COUNT=$(echo "$DETECTION_RESULT" | jq -r '.models | length')
+        HAS_LABEL=$(echo "$DETECTION_RESULT" | jq -r '.has_label')
+        HAS_IMPORTANCE=$(echo "$DETECTION_RESULT" | jq -r '.has_importance')
+        
+        echo "🎯 Detected strategy: $STRATEGY"
+        echo "🤖 Models to train: $MODELS_COUNT"
+        echo "😊 Has sentiment: $HAS_LABEL"
+        echo "🎯 Has importance: $HAS_IMPORTANCE"
+        
+        # Exporter les variables
+        echo "TRAINING_STRATEGY=$STRATEGY" >> $GITHUB_ENV
+        echo "HAS_LABEL=$HAS_LABEL" >> $GITHUB_ENV
+        echo "HAS_IMPORTANCE=$HAS_IMPORTANCE" >> $GITHUB_ENV
+        echo "training-strategy=$STRATEGY" >> $GITHUB_OUTPUT
+        
+        # Créer les répertoires de sortie
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
+
+    - name: 🤖 Train Multi-Model Strategy
       id: training
       run: |
         set -euo pipefail
         
-        echo "🚀 Starting INCREMENTAL FinBERT fine-tuning..."
-        echo "📋 Configuration:"
-        echo "  Dataset: $DATASET"
-        echo "  Target Model: $TARGET_MODEL"
-        echo "  Training Mode: $TRAINING_MODE"
-        echo "  Push to Hub: $PUSH_TO_HUB"
-        echo "  Epochs: $EPOCHS"
-        echo "  Learning Rate: $LEARNING_RATE"
-        echo "  Force Update: $FORCE_UPDATE"
+        echo "🚀 Starting Smart Multi-Model Training..."
+        echo "📋 Strategy: $TRAINING_STRATEGY"
         
-        # Output directory local (toujours local pour les artifacts)
-        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-        LOCAL_OUTPUT_DIR="models/incremental_${TRAINING_MODE}_${TIMESTAMP}"
-        mkdir -p "$LOCAL_OUTPUT_DIR"
-        echo "📁 Local output directory: $LOCAL_OUTPUT_DIR"
+        DATASET_FILE="datasets/$DATASET"
+        MODELS_TRAINED=0
+        SENTIMENT_UPDATED=false
+        IMPORTANCE_UPDATED=false
         
-        # Construire les arguments pour le script de fine-tuning
-        ARGS="--dataset datasets/$DATASET --output_dir $LOCAL_OUTPUT_DIR --epochs $EPOCHS --lr $LEARNING_RATE"
-        
-        # Mode incrémental : partir du modèle existant
-        if [ "$TRAINING_MODE" = "incremental" ]; then
-          # Vérifier si le modèle de production existe
-          echo "🔄 Checking for existing production model..."
-          if huggingface-cli repo info "$TARGET_MODEL" >/dev/null 2>&1; then
-            echo "✅ Found existing model: $TARGET_MODEL"
-            ARGS="$ARGS --model_name $TARGET_MODEL --incremental --baseline-model $TARGET_MODEL"
-          else
-            echo "⚠️ Production model not found, starting from base model"
-            ARGS="$ARGS --model_name $FALLBACK_MODEL"
-          fi
-        else
-          # Mode fresh : repartir du modèle de base
-          echo "🆕 Starting fresh from base model: $FALLBACK_MODEL"
-          ARGS="$ARGS --model_name $FALLBACK_MODEL"
-        fi
-        
-        # Options pour mise à jour automatique
-        if [ "$PUSH_TO_HUB" = "true" ]; then
-          ARGS="$ARGS --push --hub_id $TARGET_MODEL"
-          echo "🚀 Will push to HuggingFace Hub as: $TARGET_MODEL"
-        fi
-        
+        # Arguments communs
+        COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE"
         if [ "$FORCE_UPDATE" = "true" ]; then
-          ARGS="$ARGS --force-update"
-          echo "⚡ Force update enabled"
+          COMMON_ARGS="$COMMON_ARGS --force-update"
         fi
         
-        echo "🔥 Launching incremental training with args: $ARGS"
-        
-        # Exécuter le fine-tuning incrémental
-        if python scripts/finetune.py $ARGS; then
-          echo "✅ Incremental training completed successfully!"
+        # Entraîner le modèle de sentiment si disponible
+        if [ "$HAS_LABEL" = "true" ]; then
+          echo "😊 Training sentiment model..."
+          SENTIMENT_OUTPUT="models/sentiment-$TIMESTAMP"
           
-          # Vérifier le rapport d'entraînement
-          if [ -f "$LOCAL_OUTPUT_DIR/incremental_training_report.json" ]; then
-            echo "📊 Incremental training report found"
-            
-            # Extraire les informations importantes
-            REPORT="$LOCAL_OUTPUT_DIR/incremental_training_report.json"
-            MODEL_UPDATED=$(cat "$REPORT" | jq -r '.model_updated // false')
-            BASELINE_ACC=$(cat "$REPORT" | jq -r '.baseline_metrics.accuracy // 0')
-            NEW_ACC=$(cat "$REPORT" | jq -r '.new_metrics.accuracy // 0')
-            
-            echo "📈 Training results:"
-            echo "  Baseline accuracy: $BASELINE_ACC"
-            echo "  New accuracy: $NEW_ACC"
-            echo "  Model updated: $MODEL_UPDATED"
-            
-            # Outputs pour les étapes suivantes
-            echo "model-updated=$MODEL_UPDATED" >> $GITHUB_OUTPUT
-            echo "training-metrics={\"baseline_accuracy\":$BASELINE_ACC,\"new_accuracy\":$NEW_ACC,\"model_updated\":$MODEL_UPDATED}" >> $GITHUB_OUTPUT
-            
-            if [ "$MODEL_UPDATED" = "true" ]; then
-              echo "🎉 Model was improved and updated on HuggingFace!"
-              echo "final-model-id=$TARGET_MODEL" >> $GITHUB_OUTPUT
+          if [ "$TRAINING_MODE" = "incremental" ]; then
+            if huggingface-cli repo info "$SENTIMENT_MODEL" >/dev/null 2>&1; then
+              echo "📥 Found existing sentiment model, using incremental mode"
+              python scripts/finetune.py \
+                --dataset "$DATASET_FILE" \
+                --target-column label \
+                --output_dir "$SENTIMENT_OUTPUT" \
+                --incremental --baseline-model "$SENTIMENT_MODEL" \
+                --push --hub_id "$SENTIMENT_MODEL" \
+                $COMMON_ARGS
             else
-              echo "📊 Model was not updated (no significant improvement)"
-              echo "final-model-id=" >> $GITHUB_OUTPUT
+              echo "🆕 Creating new sentiment model"
+              python scripts/finetune.py \
+                --dataset "$DATASET_FILE" \
+                --target-column label \
+                --output_dir "$SENTIMENT_OUTPUT" \
+                --model_name "$FALLBACK_MODEL" \
+                --push --hub_id "$SENTIMENT_MODEL" \
+                $COMMON_ARGS
             fi
           else
-            echo "⚠️ No incremental training report found"
-            echo "model-updated=false" >> $GITHUB_OUTPUT
-            echo "training-metrics={}" >> $GITHUB_OUTPUT
-            echo "final-model-id=" >> $GITHUB_OUTPUT
+            # Mode fresh
+            python scripts/finetune.py \
+              --dataset "$DATASET_FILE" \
+              --target-column label \
+              --output_dir "$SENTIMENT_OUTPUT" \
+              --model_name "$FALLBACK_MODEL" \
+              --push --hub_id "$SENTIMENT_MODEL" \
+              $COMMON_ARGS
           fi
           
-          # Output du chemin local pour les artifacts
-          echo "model-path=$LOCAL_OUTPUT_DIR" >> $GITHUB_OUTPUT
+          MODELS_TRAINED=$((MODELS_TRAINED + 1))
+          SENTIMENT_UPDATED=true
+          echo "✅ Sentiment model completed"
+        fi
+        
+        # Entraîner le modèle d'importance si disponible
+        if [ "$HAS_IMPORTANCE" = "true" ]; then
+          echo "🎯 Training importance model..."
+          IMPORTANCE_OUTPUT="models/importance-$TIMESTAMP"
           
-        else
-          echo "❌ Incremental training failed"
+          if [ "$TRAINING_MODE" = "incremental" ]; then
+            if huggingface-cli repo info "$IMPORTANCE_MODEL" >/dev/null 2>&1; then
+              echo "📥 Found existing importance model, using incremental mode"
+              python scripts/finetune.py \
+                --dataset "$DATASET_FILE" \
+                --target-column importance \
+                --output_dir "$IMPORTANCE_OUTPUT" \
+                --incremental --baseline-model "$IMPORTANCE_MODEL" \
+                --push --hub_id "$IMPORTANCE_MODEL" \
+                $COMMON_ARGS
+            else
+              echo "🆕 Creating new importance model"
+              python scripts/finetune.py \
+                --dataset "$DATASET_FILE" \
+                --target-column importance \
+                --output_dir "$IMPORTANCE_OUTPUT" \
+                --model_name "$FALLBACK_MODEL" \
+                --push --hub_id "$IMPORTANCE_MODEL" \
+                $COMMON_ARGS
+            fi
+          else
+            # Mode fresh
+            python scripts/finetune.py \
+              --dataset "$DATASET_FILE" \
+              --target-column importance \
+              --output_dir "$IMPORTANCE_OUTPUT" \
+              --model_name "$FALLBACK_MODEL" \
+              --push --hub_id "$IMPORTANCE_MODEL" \
+              $COMMON_ARGS
+          fi
+          
+          MODELS_TRAINED=$((MODELS_TRAINED + 1))
+          IMPORTANCE_UPDATED=true
+          echo "✅ Importance model completed"
+        fi
+        
+        if [ $MODELS_TRAINED -eq 0 ]; then
+          echo "❌ No valid training columns found"
           exit 1
         fi
+        
+        # Outputs
+        echo "models-trained=$MODELS_TRAINED" >> $GITHUB_OUTPUT
+        echo "sentiment-updated=$SENTIMENT_UPDATED" >> $GITHUB_OUTPUT
+        echo "importance-updated=$IMPORTANCE_UPDATED" >> $GITHUB_OUTPUT
+        
+        echo "🎉 Multi-model training completed: $MODELS_TRAINED models"
 
     - name: 🏷️ Create Version Tag
-      if: success() && steps.training.outputs.model-updated == 'true'
+      if: success()
       run: |
         set -euo pipefail
         
-        # Tag avec numéro de version incrémental
-        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-        TAG_NAME="prod-model-v${TIMESTAMP}"
+        TAG_NAME="multi-model-v$TIMESTAMP"
         
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
-        TAG_MESSAGE="🚀 Production Model Updated: $TARGET_MODEL
+        TAG_MESSAGE="🚀 Multi-Model Update: $TRAINING_STRATEGY
 
-        📊 Incremental Training Results:
+        📊 Training Results:
         - Dataset: $DATASET
-        - Training Mode: $TRAINING_MODE
-        - Baseline Accuracy: $(echo '${{ steps.training.outputs.training-metrics }}' | jq -r '.baseline_accuracy // "N/A"')
-        - New Accuracy: $(echo '${{ steps.training.outputs.training-metrics }}' | jq -r '.new_accuracy // "N/A"')
-        - Improvement: $(echo '${{ steps.training.outputs.training-metrics }}' | jq -r '.model_updated // false')
+        - Strategy: $TRAINING_STRATEGY
+        - Models trained: ${{ steps.training.outputs.models-trained }}
+        - Sentiment updated: ${{ steps.training.outputs.sentiment-updated }}
+        - Importance updated: ${{ steps.training.outputs.importance-updated }}
         - Timestamp: $TIMESTAMP
         - Commit: ${{ github.sha }}
 
-        🔗 Model: https://huggingface.co/$TARGET_MODEL
-        🤖 Generated by TradePulse ML Incremental Pipeline"
+        🔗 Models:
+        $([ "${{ steps.training.outputs.sentiment-updated }}" = "true" ] && echo "- Sentiment: https://huggingface.co/$SENTIMENT_MODEL")
+        $([ "${{ steps.training.outputs.importance-updated }}" = "true" ] && echo "- Importance: https://huggingface.co/$IMPORTANCE_MODEL")
+
+        🤖 Generated by TradePulse ML Smart Pipeline"
         
         git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
         git push origin "$TAG_NAME"
         
         echo "✅ Created version tag: $TAG_NAME"
 
-    - name: 📊 Final Summary
+    - name: 📊 Smart Final Summary
       if: always()
       run: |
         set -euo pipefail
         
-        echo "📊 TradePulse ML - Incremental Training Summary"
-        echo "=============================================="
+        echo "🧠 TradePulse ML - Smart Multi-Model Training Summary"
+        echo "=================================================="
         echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-        echo "🔗 Commit: ${{ github.sha }}"
-        echo "🎯 Trigger: ${{ needs.check-prerequisites.outputs.trigger-reason }}"
-        echo "🎯 Training Mode: $TRAINING_MODE"
-        echo "📦 Target Model: $TARGET_MODEL"
+        echo "🎯 Strategy: $TRAINING_STRATEGY"
+        echo "🤖 Models trained: ${{ steps.training.outputs.models-trained }}"
         echo "📊 Dataset: $DATASET"
         echo ""
         
-        if [ -f "models/incremental_*/incremental_training_report.json" ]; then
-          echo "📈 Training Results:"
-          LATEST_REPORT=$(find models/ -name "incremental_training_report.json" -exec ls -t {} + | head -1)
-          cat "$LATEST_REPORT" | jq '.' || cat "$LATEST_REPORT"
-        else
-          echo "⚠️ No incremental training report found"
+        if [ "${{ steps.training.outputs.sentiment-updated }}" = "true" ]; then
+          echo "✅ Sentiment Model:"
+          echo "  😊 URL: https://huggingface.co/$SENTIMENT_MODEL"
+          echo "  🏷️ Labels: positive, negative, neutral"
+        fi
+        
+        if [ "${{ steps.training.outputs.importance-updated }}" = "true" ]; then
+          echo "✅ Importance Model:"
+          echo "  🎯 URL: https://huggingface.co/$IMPORTANCE_MODEL"
+          echo "  🏷️ Labels: générale, importante, critique"
         fi
         
         echo ""
-        echo "🎯 Model Status:"
-        if [ "${{ steps.training.outputs.model-updated }}" = "true" ]; then
-          echo "  ✅ Model was IMPROVED and UPDATED"
-          echo "  🔗 Production Model: https://huggingface.co/$TARGET_MODEL"
-          echo "  🚀 Ready for use in TradePulse application!"
-        else
-          echo "  📊 Model was NOT updated (no significant improvement)"
-          echo "  💡 Consider collecting more diverse training data"
+        echo "💡 Integration in TradePulse:"
+        if [ "${{ steps.training.outputs.sentiment-updated }}" = "true" ]; then
+          echo "  SENTIMENT_MODEL = \"$SENTIMENT_MODEL\""
         fi
-        
+        if [ "${{ steps.training.outputs.importance-updated }}" = "true" ]; then
+          echo "  IMPORTANCE_MODEL = \"$IMPORTANCE_MODEL\""
+        fi
         echo ""
-        echo "🔄 Next Steps:"
-        echo "  1. Test the updated model in your TradePulse application"
-        echo "  2. Monitor performance on real financial data"
-        echo "  3. Collect feedback for future improvements"
+        echo "🔄 Next: Use HTML editor to retrain with new data!"
 
     - name: 📤 Upload Training Artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: incremental-training-${{ github.run_id }}
+        name: multi-model-training-${{ github.run_id }}
         path: |
-          models/incremental_*/**
+          models/**
+          training_strategy.json
           pre_training_validation.json
           finetune.log
         retention-days: 30
-
-    - name: 🎉 Success Notification
-      if: success()
-      run: |
-        echo "✅ TradePulse ML Incremental Pipeline completed!"
-        echo ""
-        echo "🎯 Key Results:"
-        echo "  Target Model: $TARGET_MODEL"
-        echo "  Training Mode: $TRAINING_MODE"
-        echo "  Model Updated: ${{ steps.training.outputs.model-updated }}"
-        echo ""
-        
-        if [ "${{ steps.training.outputs.model-updated }}" = "true" ]; then
-          echo "🚀 SUCCESS: Your production model has been improved!"
-          echo "   📎 Model URL: https://huggingface.co/$TARGET_MODEL"
-          echo "   🔧 Update your TradePulse app to use this model"
-          echo ""
-          echo "💡 Integration in your app:"
-          echo "   USE_CUSTOM_FINBERT = True"
-          echo "   _FINBERT_MODEL = \"$TARGET_MODEL\""
-        else
-          echo "📊 INFO: Model was not updated (no significant improvement)"
-          echo "   💡 Try collecting more diverse training data"
-        fi
