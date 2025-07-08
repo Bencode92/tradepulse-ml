@@ -541,7 +541,7 @@ def main():
         logger.info("🔄 Mode apprentissage incrémental activé")
         
         # Déterminer le modèle de base selon le mode
-        if args.baseline_model is None:
+        if getattr(args, 'baseline_model', None) is None:
             args.baseline_model = MODELS_CONFIG.get(args.mode, {}).get("hf_id", "yiyanghkust/finbert-tone")
         
         logger.info(f"🎯 Mode: {args.mode}")
@@ -573,13 +573,13 @@ def main():
             should_update, reason = tuner.should_update_model(
                 baseline_metrics, 
                 test_metrics,
-                args.min_improvement
+                getattr(args, 'min_improvement', 0.02)
             )
             
             logger.info(f"📊 Décision de mise à jour: {reason}")
             
             # Forcer la mise à jour si demandé
-            if args.force_update and not should_update:
+            if getattr(args, 'force_update', False) and not should_update:
                 should_update = True
                 reason = f"Mise à jour forcée (--force-update). {reason}"
                 logger.warning(f"⚠️ {reason}")
@@ -629,7 +629,19 @@ def main():
                 args.output_dir = Path(new_output)
                 logger.info("📂 Nom de modèle auto-généré : %s", args.output_dir)
 
-        tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
+        # Support du modèle baseline pour l'incrémental (AJOUTÉ)
+        baseline_model = getattr(args, 'baseline_model', None) if hasattr(args, 'baseline_model') else None
+        
+        if baseline_model and args.incremental:
+            tuner = Finetuner(
+                model_name=args.model_name, 
+                max_length=args.max_length,
+                incremental_mode=True,
+                baseline_model=baseline_model
+            )
+        else:
+            tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
+
         ds, _ = tuner.load_dataset(args.dataset)
         tuner.train(ds, args)
 
