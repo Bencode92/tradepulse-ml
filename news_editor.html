@@ -74,12 +74,13 @@
         <span id="status" class="text-sm text-gray-300 ml-auto flex items-center"></span>
       </div>
 
-      <!-- Statistiques du dataset -->
-      <div id="statsPanel" class="hidden grid md:grid-cols-4 gap-4">
+      <!-- Statistiques du dataset avec importance -->
+      <div id="statsPanel" class="hidden grid md:grid-cols-7 gap-4">
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-blue-400" id="totalRows">0</div>
           <div class="text-sm text-gray-300">Total lignes</div>
         </div>
+        <!-- Stats sentiment -->
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-green-400" id="positiveCount">0</div>
           <div class="text-sm text-gray-300">Positifs</div>
@@ -91,6 +92,19 @@
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-gray-400" id="neutralCount">0</div>
           <div class="text-sm text-gray-300">Neutres</div>
+        </div>
+        <!-- Stats importance -->
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-red-400" id="critiqueCount">0</div>
+          <div class="text-sm text-gray-300">Critiques</div>
+        </div>
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-yellow-400" id="importanteCount">0</div>
+          <div class="text-sm text-gray-300">Importantes</div>
+        </div>
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-green-400" id="généraleCount">0</div>
+          <div class="text-sm text-gray-300">Générales</div>
         </div>
       </div>
 
@@ -110,6 +124,13 @@
         positive: 'text-green-400',
         neutral:  'text-gray-400',
         negative: 'text-red-400'
+      };
+
+      // 🎯 NOUVEAU : Couleurs pour l'importance
+      const importanceColors = {
+        critique: 'text-red-400',
+        importante: 'text-yellow-400', 
+        générale: 'text-green-400'
       };
 
       const qs = id => document.getElementById(id);
@@ -140,10 +161,19 @@
       // ----------------- Validation locale -----------------
       function validateDataset() {
         const issues = [];
-        const stats = { positive: 0, negative: 0, neutral: 0, invalid: 0 };
+        const stats = { positive: 0, negative: 0, neutral: 0, invalid_sentiment: 0 };
+        const importanceStats = { critique: 0, importante: 0, générale: 0, invalid_importance: 0 };
         
-        if (!headers.includes('text') || !headers.includes('label')) {
-          issues.push('❌ Colonnes "text" et "label" requises');
+        const requiredHeaders = ['text', 'label'];
+        const hasImportance = headers.includes('importance');
+        
+        if (hasImportance) requiredHeaders.push('importance');
+        
+        // Vérifier colonnes requises
+        for (const header of requiredHeaders) {
+          if (!headers.includes(header)) {
+            issues.push(`❌ Colonne "${header}" requise`);
+          }
         }
         
         rows.forEach((row, idx) => {
@@ -155,20 +185,40 @@
             issues.push(`⚠️ Ligne ${idx + 1}: texte trop long (> 512 caractères)`);
           }
           
+          // Validation sentiment
           const label = row.label?.toLowerCase();
           if (['positive', 'negative', 'neutral'].includes(label)) {
             stats[label]++;
           } else {
-            stats.invalid++;
-            issues.push(`❌ Ligne ${idx + 1}: label invalide "${row.label}"`);
+            stats.invalid_sentiment++;
+            issues.push(`❌ Ligne ${idx + 1}: sentiment invalide "${row.label}"`);
+          }
+          
+          // 🎯 NOUVEAU : Validation importance
+          if (hasImportance) {
+            const importance = row.importance?.toLowerCase();
+            if (['critique', 'importante', 'générale'].includes(importance)) {
+              importanceStats[importance]++;
+            } else {
+              importanceStats.invalid_importance++;
+              issues.push(`❌ Ligne ${idx + 1}: importance invalide "${row.importance}"`);
+            }
           }
         });
         
-        // Vérifier équilibrage
+        // Vérifier équilibrage sentiment
         const total = rows.length;
         const maxPercent = Math.max(stats.positive, stats.negative, stats.neutral) / total;
         if (maxPercent > 0.7) {
-          issues.push(`⚠️ Dataset déséquilibré (${Math.round(maxPercent * 100)}% d'une classe)`);
+          issues.push(`⚠️ Dataset déséquilibré sentiment (${Math.round(maxPercent * 100)}% d'une classe)`);
+        }
+        
+        // Vérifier équilibrage importance
+        if (hasImportance) {
+          const maxImportancePercent = Math.max(importanceStats.critique, importanceStats.importante, importanceStats.générale) / total;
+          if (maxImportancePercent > 0.7) {
+            issues.push(`⚠️ Dataset déséquilibré importance (${Math.round(maxImportancePercent * 100)}% d'une classe)`);
+          }
         }
         
         // Afficher résultats
@@ -177,10 +227,20 @@
         html += `<h4 class="font-medium text-white mb-2">📊 Statistiques</h4>`;
         html += `<ul class="space-y-1 text-sm">`;
         html += `<li>Total: ${total} échantillons</li>`;
-        html += `<li>Positifs: ${stats.positive} (${Math.round(stats.positive/total*100)}%)</li>`;
-        html += `<li>Négatifs: ${stats.negative} (${Math.round(stats.negative/total*100)}%)</li>`;
-        html += `<li>Neutres: ${stats.neutral} (${Math.round(stats.neutral/total*100)}%)</li>`;
-        if (stats.invalid > 0) html += `<li class="text-red-400">Invalides: ${stats.invalid}</li>`;
+        html += `<li><strong>Sentiment:</strong></li>`;
+        html += `<li>• Positifs: ${stats.positive} (${Math.round(stats.positive/total*100)}%)</li>`;
+        html += `<li>• Négatifs: ${stats.negative} (${Math.round(stats.negative/total*100)}%)</li>`;
+        html += `<li>• Neutres: ${stats.neutral} (${Math.round(stats.neutral/total*100)}%)</li>`;
+        if (stats.invalid_sentiment > 0) html += `<li class="text-red-400">• Invalides: ${stats.invalid_sentiment}</li>`;
+        
+        if (hasImportance) {
+          html += `<li><strong>Importance:</strong></li>`;
+          html += `<li>• Critiques: ${importanceStats.critique} (${Math.round(importanceStats.critique/total*100)}%)</li>`;
+          html += `<li>• Importantes: ${importanceStats.importante} (${Math.round(importanceStats.importante/total*100)}%)</li>`;
+          html += `<li>• Générales: ${importanceStats.générale} (${Math.round(importanceStats.générale/total*100)}%)</li>`;
+          if (importanceStats.invalid_importance > 0) html += `<li class="text-red-400">• Invalides: ${importanceStats.invalid_importance}</li>`;
+        }
+        
         html += `</ul></div>`;
         
         html += `<div>`;
@@ -202,16 +262,27 @@
       function updateStats() {
         if (!rows.length) return;
         
-        const stats = { positive: 0, negative: 0, neutral: 0 };
+        const sentimentStats = { positive: 0, negative: 0, neutral: 0 };
+        const importanceStats = { critique: 0, importante: 0, générale: 0 };
+        
         rows.forEach(row => {
           const label = row.label?.toLowerCase();
-          if (stats.hasOwnProperty(label)) stats[label]++;
+          const importance = row.importance?.toLowerCase();
+          
+          if (sentimentStats.hasOwnProperty(label)) sentimentStats[label]++;
+          if (importanceStats.hasOwnProperty(importance)) importanceStats[importance]++;
         });
         
+        // Stats sentiment
         qs('totalRows').textContent = rows.length;
-        qs('positiveCount').textContent = stats.positive;
-        qs('negativeCount').textContent = stats.negative;
-        qs('neutralCount').textContent = stats.neutral;
+        qs('positiveCount').textContent = sentimentStats.positive;
+        qs('negativeCount').textContent = sentimentStats.negative;
+        qs('neutralCount').textContent = sentimentStats.neutral;
+        
+        // 🎯 NOUVEAU : Stats importance
+        qs('critiqueCount').textContent = importanceStats.critique;
+        qs('importanteCount').textContent = importanceStats.importante;
+        qs('généraleCount').textContent = importanceStats.générale;
         
         statsPanel.classList.remove('hidden');
       }
@@ -243,14 +314,25 @@
 
               html += `
                 <td class="px-4 py-3 ${color}">
-                  <select data-row="${rIdx}"
+                  <select data-row="${rIdx}" data-type="label"
                           class="bg-transparent outline-none ${color}">
-                    <option value="positive" ${val==='positive'?'selected':''}
-                            style="color:#4ade80">positive</option>
-                    <option value="neutral"  ${val==='neutral'?'selected':''}
-                            style="color:#9ca3af">neutral</option>
-                    <option value="negative" ${val==='negative'?'selected':''}
-                            style="color:#f87171">negative</option>
+                    <option value="positive" ${val==='positive'?'selected':''}>positive</option>
+                    <option value="neutral"  ${val==='neutral'?'selected':''}>neutral</option>
+                    <option value="negative" ${val==='negative'?'selected':''}>negative</option>
+                  </select>
+                </td>`;
+            } else if (h === 'importance') {
+              // 🎯 NOUVELLE colonne importance
+              const val = (row.importance || 'générale').toLowerCase();
+              const color = importanceColors[val] || 'text-gray-400';
+              
+              html += `
+                <td class="px-4 py-3 ${color}">
+                  <select data-row="${rIdx}" data-type="importance"
+                          class="bg-transparent outline-none ${color}">
+                    <option value="critique" ${val==='critique'?'selected':''}>critique</option>
+                    <option value="importante" ${val==='importante'?'selected':''}>importante</option>
+                    <option value="générale" ${val==='générale'?'selected':''}>générale</option>
                   </select>
                 </td>`;
             } else {
@@ -284,20 +366,33 @@
           });
         });
 
-        tableWrapper.querySelectorAll('select[data-row]').forEach(sel => {
+        // 🎯 NOUVEAU : Listeners pour les selects (label ET importance)
+        tableWrapper.querySelectorAll('select[data-type]').forEach(sel => {
           sel.addEventListener('change', () => {
             const r = +sel.dataset.row;
-            rows[r].label = sel.value;
-
-            /* maj couleur cellule + select */
-            const td = sel.parentElement;
-            td.classList.remove(...Object.values(labelColors));
-            sel.classList.remove(...Object.values(labelColors));
-            td.classList.add(labelColors[sel.value]);
-            sel.classList.add(labelColors[sel.value]);
-
+            const type = sel.dataset.type;
+            
+            if (type === 'importance') {
+              rows[r].importance = sel.value;
+              // Mettre à jour couleur
+              const td = sel.parentElement;
+              td.classList.remove(...Object.values(importanceColors));
+              sel.classList.remove(...Object.values(importanceColors));
+              td.classList.add(importanceColors[sel.value]);
+              sel.classList.add(importanceColors[sel.value]);
+              statusSpan.textContent = `Ligne ${r + 1} : importance ➜ ${sel.value}`;
+            } else {
+              // Sentiment (existant)
+              rows[r].label = sel.value;
+              const td = sel.parentElement;
+              td.classList.remove(...Object.values(labelColors));
+              sel.classList.remove(...Object.values(labelColors));
+              td.classList.add(labelColors[sel.value]);
+              sel.classList.add(labelColors[sel.value]);
+              statusSpan.textContent = `Ligne ${r + 1} : label ➜ ${sel.value}`;
+            }
+            
             updateStats();
-            statusSpan.textContent = `Ligne ${r + 1} : label ➜ ${sel.value}`;
           });
         });
 
@@ -344,9 +439,14 @@
         });
       }
 
+      // 🎯 MODIFIER addRowBtn pour supporter importance
       addRowBtn.addEventListener('click', () => {
         const obj = {}; 
-        headers.forEach(h => obj[h] = h === 'label' ? 'neutral' : ''); 
+        headers.forEach(h => {
+          if (h === 'label') obj[h] = 'neutral';
+          else if (h === 'importance') obj[h] = 'générale';  // 🎯 NOUVEAU
+          else obj[h] = '';
+        }); 
         rows.push(obj);
         renderTable(); 
         statusSpan.textContent = `Ligne ajoutée (#${rows.length})`;
