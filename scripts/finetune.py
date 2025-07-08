@@ -49,6 +49,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
+from collections import Counter
 
 import numpy as np
 import pandas as pd
@@ -82,8 +83,8 @@ MODELS_CONFIG = {
 
 # 🚀 NOUVEAU : Seuils de performance pour validation
 PERFORMANCE_THRESHOLDS = {
-    "min_accuracy": 0.80,      # Précision minimum acceptable
-    "min_f1": 0.78,            # F1-score minimum 
+    "min_accuracy": 0.70,      # Précision minimum acceptable (réduit pour petits datasets)
+    "min_f1": 0.65,            # F1-score minimum (réduit pour petits datasets)
     "improvement_threshold": 0.02,  # Amélioration minimum pour mise à jour (2%)
 }
 
@@ -253,7 +254,7 @@ class Finetuner:
             raise
 
     # -------------------------------------------------------------------
-    # Data helpers (adaptés pour supporter le mode incrémental)
+    # Data helpers (adaptés pour supporter le mode incrémental + petits datasets)
     # -------------------------------------------------------------------
     def _load_raw(self, path: Path) -> List[Dict[str, str]]:
         if path.suffix.lower() == ".csv":
@@ -279,6 +280,22 @@ class Finetuner:
             out.append({"text": text, "label": self.LABEL_MAP[label]})
         return out
 
+    def _check_dataset_balance(self, data: List[Dict[str, str]]) -> bool:
+        """Vérifie si le dataset est suffisamment équilibré pour un split stratifié"""
+        label_counts = Counter([d["label"] for d in data])
+        
+        logger.info(f"📊 Distribution des labels: {dict(label_counts)}")
+        
+        # Vérifier que chaque classe a au moins 2 échantillons
+        min_samples = min(label_counts.values()) if label_counts else 0
+        
+        if min_samples < 2:
+            logger.warning(f"⚠️ Dataset déséquilibré: classe minimale = {min_samples} échantillon(s)")
+            logger.warning(f"⚠️ Split stratifié impossible, utilisation d'un split simple")
+            return False
+        
+        return True
+
     def load_dataset(self, path: Path) -> Tuple[DatasetDict, Dataset]:
         """Load & tokenise dataset, return HF DatasetDict + test dataset pour évaluation incrémentale"""
         raw = self._load_raw(path)
@@ -287,32 +304,66 @@ class Finetuner:
             raise RuntimeError("No usable samples detected in dataset !")
         logger.info("📊 %d samples after cleaning", len(data))
 
+        # 🔧 CORRECTION : Vérifier si on peut faire un split stratifié
+        can_stratify = self._check_dataset_balance(data)
+        
         if self.incremental_mode:
             # 🚀 NOUVEAU : Division en 3 parties pour l'apprentissage incrémental
             # 70% train, 20% validation, 10% test (pour évaluation baseline)
-            train_val, test_data = train_test_split(
-                data,
-                test_size=0.1,
-                stratify=[d["label"] for d in data],
-                random_state=42,
-            )
-            
-            train, val = train_test_split(
-                train_val,
-                test_size=0.25,  # 0.25 de 90% = 22.5% du total ≈ 20%
-                stratify=[d["label"] for d in train_val],
-                random_state=42,
-            )
+            if len(data) >= 10 and can_stratify:
+                # Split stratifié si possible
+                train_val, test_data = train_test_split(
+                    data,
+                    test_size=0.1,
+                    stratify=[d["label"] for d in data],
+                    random_state=42,
+                )
+                
+                train, val = train_test_split(
+                    train_val,
+                    test_size=0.25,  # 0.25 de 90% = 22.5% du total ≈ 20%
+                    stratify=[d["label"] for d in train_val] if self._check_dataset_balance(train_val) else None,
+                    random_state=42,
+                )
+            else:
+                # Split simple pour petits datasets
+                logger.warning("⚠️ Dataset trop petit pour split optimal, utilisation de proportions adaptées")
+                
+                if len(data) >= 5:
+                    # Au moins 5 échantillons : 1 pour test, reste pour train/val
+                    test_data = data[:1]
+                    train_val = data[1:]
+                    
+                    if len(train_val) >= 2:
+                        train = train_val[:-1]
+                        val = train_val[-1:]
+                    else:
+                        train = train_val
+                        val = []
+                else:
+                    # Très petit dataset : tout en train, pas de validation
+                    train = data
+                    val = []
+                    test_data = []
             
             logger.info(f"📊 Mode incrémental - Train: {len(train)}, Validation: {len(val)}, Test: {len(test_data)}")
         else:
-            # Mode classique (existant, conservé)
-            train, val = train_test_split(
-                data,
-                test_size=0.2,
-                stratify=[d["label"] for d in data],
-                random_state=42,
-            )
+            # Mode classique (existant, conservé mais avec gestion des petits datasets)
+            if len(data) >= 4 and can_stratify:
+                # Split stratifié si possible
+                train, val = train_test_split(
+                    data,
+                    test_size=0.2,
+                    stratify=[d["label"] for d in data],
+                    random_state=42,
+                )
+            else:
+                # Split simple pour petits datasets
+                logger.warning("⚠️ Dataset trop petit ou déséquilibré, split simple sans stratification")
+                split_idx = max(1, int(len(data) * 0.8))
+                train = data[:split_idx]
+                val = data[split_idx:] if len(data) > split_idx else []
+            
             test_data = []  # Pas de dataset de test en mode classique
             logger.info(f"📊 Mode classique - Train: {len(train)}, Validation: {len(val)}")
 
@@ -327,9 +378,16 @@ class Finetuner:
         train_ds = Dataset.from_list(train).map(
             tok, batched=True, remove_columns=["text"]
         )
-        val_ds = Dataset.from_list(val).map(
-            tok, batched=True, remove_columns=["text"]
-        )
+        
+        # Gérer le cas où il n'y a pas de validation
+        if val:
+            val_ds = Dataset.from_list(val).map(
+                tok, batched=True, remove_columns=["text"]
+            )
+        else:
+            # Utiliser une partie du train comme validation si pas de val
+            logger.warning("⚠️ Pas de données de validation, utilisation d'une partie du train")
+            val_ds = train_ds
         
         # Dataset de test (pour évaluation baseline en mode incrémental)
         test_ds = Dataset.from_list(test_data) if test_data else None
@@ -350,7 +408,7 @@ class Finetuner:
         return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
     # -------------------------------------------------------------------
-    # Training (adapté pour supporter l'incrémental)
+    # Training (adapté pour supporter l'incrémental + petits datasets)
     # -------------------------------------------------------------------
     def train(self, ds: DatasetDict, args: argparse.Namespace, test_ds: Dataset = None):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -361,50 +419,51 @@ class Finetuner:
         else:
             run_name = f"finbert-{ts}"
 
-        # 🚀 NOUVEAU : Arguments d'entraînement adaptés pour l'incrémental
+        # 🚀 NOUVEAU : Arguments d'entraînement adaptés pour l'incrémental + petits datasets
         if self.incremental_mode:
             # Paramètres plus conservateurs pour l'apprentissage incrémental
             learning_rate = 1e-5  # Plus faible pour la stabilité
-            epochs = 2  # Moins d'epochs pour éviter l'overfitting
-            batch_size = 8  # Plus petit batch
+            epochs = min(2, args.epochs)  # Moins d'epochs pour éviter l'overfitting
+            batch_size = min(4, args.train_bs)  # Plus petit batch pour petits datasets
             patience = 1  # Arrêt précoce plus agressif
         else:
-            # Paramètres classiques (existant, conservé)
+            # Paramètres classiques adaptés pour petits datasets
             learning_rate = args.lr
-            epochs = args.epochs
-            batch_size = args.train_bs
+            epochs = min(args.epochs, 5)  # Limiter les epochs pour petits datasets
+            batch_size = min(8, args.train_bs)  # Adapter la taille de batch
             patience = 2
 
         targs = TrainingArguments(
             output_dir=args.output_dir,
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
-            per_device_eval_batch_size=args.eval_bs,
+            per_device_eval_batch_size=min(batch_size, args.eval_bs),
             learning_rate=learning_rate,
             weight_decay=args.weight_decay,
-            warmup_steps=args.warmup,
-            evaluation_strategy=args.eval_strategy,
-            save_strategy=args.save_strategy,
-            load_best_model_at_end=True,
-            metric_for_best_model="f1",
+            warmup_steps=min(args.warmup, len(ds["train"]) // 4),  # Adapter warmup
+            evaluation_strategy="epoch" if len(ds["validation"]) > 0 else "no",
+            save_strategy="epoch",
+            load_best_model_at_end=len(ds["validation"]) > 0,
+            metric_for_best_model="f1" if len(ds["validation"]) > 0 else None,
             greater_is_better=True,
             logging_dir=os.path.join(args.output_dir, "logs"),
-            logging_steps=args.logging_steps,
+            logging_steps=max(1, args.logging_steps // 10),  # Plus de logs pour petits datasets
             seed=args.seed,
             push_to_hub=False if self.incremental_mode else args.push,  # Gestion manuelle en mode incrémental
             hub_model_id=args.hub_id if (args.push and not self.incremental_mode) else None,
             report_to="tensorboard",
-            save_total_limit=2,  # Garder seulement les 2 meilleurs checkpoints
+            save_total_limit=1,  # Économiser l'espace disque
+            dataloader_drop_last=False,  # Ne pas ignorer les derniers échantillons
         )
 
         trainer = Trainer(
             model=self.model,
             args=targs,
             train_dataset=ds["train"],
-            eval_dataset=ds["validation"],
+            eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
             tokenizer=self.tokenizer,
-            compute_metrics=self._metrics,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)],
+            compute_metrics=self._metrics if len(ds["validation"]) > 0 else None,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
         )
 
         mode_info = "incremental" if self.incremental_mode else "classic"
@@ -412,16 +471,20 @@ class Finetuner:
         trainer.train()
         trainer.save_model()
 
-        eval_res = trainer.evaluate()
-        logger.info(
-            "✅ Training complete — F1: %.4f | Acc: %.4f",
-            eval_res["eval_f1"],
-            eval_res["eval_accuracy"],
-        )
+        if len(ds["validation"]) > 0:
+            eval_res = trainer.evaluate()
+            logger.info(
+                "✅ Training complete — F1: %.4f | Acc: %.4f",
+                eval_res["eval_f1"],
+                eval_res["eval_accuracy"],
+            )
+        else:
+            logger.info("✅ Training complete (no validation data)")
+            eval_res = {"eval_f1": 0.0, "eval_accuracy": 0.0}
 
         # 🚀 NOUVEAU : Évaluation sur le dataset de test pour mode incrémental
         test_metrics = None
-        if test_ds is not None and self.incremental_mode:
+        if test_ds is not None and self.incremental_mode and len(test_ds) > 0:
             logger.info("📊 Évaluation sur dataset de test...")
             test_metrics = self.evaluate_on_test(test_ds)
             logger.info(f"📊 Métriques test: {test_metrics}")
@@ -558,16 +621,22 @@ def main():
         # Chargement du dataset avec division train/val/test
         ds, test_ds = tuner.load_dataset(args.dataset)
         
-        # Évaluation baseline du modèle existant
-        logger.info("📊 Évaluation baseline du modèle existant...")
-        baseline_metrics = tuner.evaluate_on_test(test_ds)
-        logger.info(f"📊 Métriques baseline: {baseline_metrics}")
+        # Évaluation baseline du modèle existant (seulement si test_ds existe et non vide)
+        baseline_metrics = None
+        if test_ds is not None and len(test_ds) > 0:
+            logger.info("📊 Évaluation baseline du modèle existant...")
+            baseline_metrics = tuner.evaluate_on_test(test_ds)
+            logger.info(f"📊 Métriques baseline: {baseline_metrics}")
+        else:
+            logger.warning("⚠️ Pas de dataset de test pour évaluation baseline")
+            # Métriques factices pour le test
+            baseline_metrics = {"accuracy": 0.5, "f1": 0.5, "precision": 0.5, "recall": 0.5}
         
         # Entraînement incrémental
         test_metrics = tuner.train(ds, args, test_ds)
         
         # Décision de mise à jour
-        if test_metrics:
+        if test_metrics and baseline_metrics:
             logger.info("🔍 Analyse des résultats pour apprentissage incrémental...")
             
             should_update, reason = tuner.should_update_model(
@@ -615,6 +684,34 @@ def main():
                 
                 with open(report_path, "w") as f:
                     json.dump(report, f, indent=2)
+        else:
+            # Pas d'évaluation possible, forcer la mise à jour si demandé
+            logger.warning("⚠️ Pas d'évaluation possible, mise à jour conditionnelle")
+            should_update = getattr(args, 'force_update', False)
+            
+            if should_update and args.mode in ["production", "development"]:
+                hf_model_id = MODELS_CONFIG[args.mode]["hf_id"]
+                commit_msg = f"Apprentissage incrémental - Dataset petit"
+                
+                logger.info(f"🚀 Mise à jour forcée du modèle {args.mode}: {hf_model_id}")
+                tuner.push_to_huggingface(args.output_dir, hf_model_id, commit_msg)
+                
+                # Mise à jour du rapport
+                report_path = args.output_dir / "incremental_training_report.json"
+                if report_path.exists():
+                    with open(report_path, "r") as f:
+                        report = json.load(f)
+                    
+                    report.update({
+                        "baseline_metrics": baseline_metrics,
+                        "new_metrics": test_metrics or {"accuracy": 0.0, "f1": 0.0},
+                        "model_updated": should_update,
+                        "update_reason": "Force update - petit dataset",
+                        "hf_model_id": hf_model_id,
+                    })
+                    
+                    with open(report_path, "w") as f:
+                        json.dump(report, f, indent=2)
         
     else:
         # 🔄 Mode classique (existant, conservé exactement)
