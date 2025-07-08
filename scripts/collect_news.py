@@ -38,6 +38,7 @@ PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
 ML_MODELS_CONFIG = {
     "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # ✅ Modèle sentiment entraîné
     "importance": "Bencode92/tradepulse-finbert-importance",  # ✅ Modèle importance entraîné  
+    "production": "Bencode92/tradepulse-finbert-sentiment",   # Alias pour compatibilité
     "fallback": "yiyanghkust/finbert-tone",                   # Fallback de base
 }
 
@@ -89,7 +90,8 @@ class SmartNewsCollector:
     """Collecteur avec double ML (sentiment + importance) - MODÈLES PRODUITS"""
     
     def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, 
-                 auto_label: bool = False, confidence_threshold: float = 0.75):
+                 auto_label: bool = False, ml_model: str = "production",
+                 confidence_threshold: float = 0.75):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.enable_cache = enable_cache
@@ -103,6 +105,7 @@ class SmartNewsCollector:
         
         # ML Configuration
         self.auto_label = auto_label
+        self.ml_model = ml_model
         self.confidence_threshold = confidence_threshold
         self.sentiment_classifier = None
         self.importance_classifier = None
@@ -585,6 +588,8 @@ def main():
     
     # Arguments ML
     parser.add_argument("--auto-label", action="store_true", help="Activer double ML labeling PRODUIT")
+    parser.add_argument("--ml-model", choices=["production", "sentiment", "importance", "fallback"], 
+                       default="production", help="Modèle ML (compatibilité)")
     parser.add_argument("--confidence-threshold", type=float, default=0.75, 
                        help="Seuil de confiance ML")
 
@@ -600,6 +605,7 @@ def main():
             output_dir=args.output_dir,
             enable_cache=not args.no_cache,
             auto_label=args.auto_label,
+            ml_model=args.ml_model,
             confidence_threshold=args.confidence_threshold
         )
 
