@@ -10,19 +10,30 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental
 - Modèles production/développement séparés
 - Rollback automatique si dégradation
 
+🎯 NOUVEAU : Support Importance !
+- --target-column importance : Entraîne sur l'importance (critique/importante/générale)
+- --target-column label : Entraîne sur le sentiment (positive/negative/neutral)
+
 •  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
-  en **positive / neutral / negative**.
+  en **positive / neutral / negative** ou **critique / importante / générale**.
 •  Découpe automatiquement en train / validation (80 / 20 stratifié).
 •  Tokenise, fine‑tune et enregistre un FinBERT (ou autre modèle) déjà
   présent sur HuggingFace Hub.
 •  Produit un *training_report.json* + logs TensorBoard dans <output_dir>.
 
-Usage Classique (existant):
+Usage Sentiment (existant):
 ---------------------------
 $ python finetune.py \
     --dataset datasets/news_20250705.csv \
-    --output_dir models/finbert-v1 \
-    --model_name yiyanghkust/finbert-tone
+    --output_dir models/finbert-sentiment \
+    --target-column label
+
+🎯 NOUVEAU - Usage Importance:
+-----------------------------
+$ python finetune.py \
+    --dataset datasets/news_20250705.csv \
+    --output_dir models/finbert-importance \
+    --target-column importance
 
 🚀 NOUVEAU - Usage Apprentissage Incrémental:
 --------------------------------------------
@@ -108,17 +119,34 @@ logger = logging.getLogger("tradepulse-finetune")
 
 
 # ---------------------------------------------------------------------------
-# Fine‑tuner class (adapté pour supporter l'incrémental)
+# Fine‑tuner class (adapté pour supporter l'incrémental + importance)
 # ---------------------------------------------------------------------------
 class Finetuner:
-    LABEL_MAP: Dict[str, int] = {"negative": 0, "neutral": 1, "positive": 2}
-    ID2LABEL: Dict[int, str] = {v: k for k, v in LABEL_MAP.items()}
+    # 😊 Labels pour sentiment (existant)
+    SENTIMENT_LABEL_MAP: Dict[str, int] = {"negative": 0, "neutral": 1, "positive": 2}
+    SENTIMENT_ID2LABEL: Dict[int, str] = {v: k for k, v in SENTIMENT_LABEL_MAP.items()}
+    
+    # 🎯 NOUVEAU : Labels pour importance
+    IMPORTANCE_LABEL_MAP: Dict[str, int] = {"générale": 0, "importante": 1, "critique": 2}
+    IMPORTANCE_ID2LABEL: Dict[int, str] = {v: k for k, v in IMPORTANCE_LABEL_MAP.items()}
 
-    def __init__(self, model_name: str, max_length: int, incremental_mode: bool = False, baseline_model: str = None):
+    def __init__(self, model_name: str, max_length: int, incremental_mode: bool = False, 
+                 baseline_model: str = None, target_column: str = "label"):
         self.model_name = model_name
         self.max_length = max_length
         self.incremental_mode = incremental_mode
         self.baseline_model = baseline_model
+        self.target_column = target_column  # 🎯 NOUVEAU
+        
+        # 🎯 NOUVEAU : Sélection des labels selon la colonne cible
+        if target_column == "importance":
+            self.LABEL_MAP = self.IMPORTANCE_LABEL_MAP
+            self.ID2LABEL = self.IMPORTANCE_ID2LABEL
+            logger.info("🎯 Mode entraînement : IMPORTANCE (critique/importante/générale)")
+        else:
+            self.LABEL_MAP = self.SENTIMENT_LABEL_MAP
+            self.ID2LABEL = self.SENTIMENT_ID2LABEL
+            logger.info("😊 Mode entraînement : SENTIMENT (positive/negative/neutral)")
         
         if incremental_mode and baseline_model:
             # 🚀 NOUVEAU : Mode incrémental - charger modèle existant
@@ -254,7 +282,7 @@ class Finetuner:
             raise
 
     # -------------------------------------------------------------------
-    # Data helpers (adaptés pour supporter le mode incrémental + petits datasets)
+    # Data helpers (adaptés pour supporter le mode incrémental + petits datasets + importance)
     # -------------------------------------------------------------------
     def _load_raw(self, path: Path) -> List[Dict[str, str]]:
         if path.suffix.lower() == ".csv":
@@ -267,14 +295,20 @@ class Finetuner:
         out: List[Dict[str, str]] = []
         for row in rows:
             text = row.get("text") or (
-                f"{row.get('title', '')} {row.get('content', '')}".strip()
-            )
-            label = (
-                row.get("label")
-                or row.get("sentiment")
-                or row.get("impact")
-                or ""
-            ).lower()
+                f"{row.get('title', '')} {row.get('content', '')}"
+            ).strip()
+            
+            # 🎯 NOUVEAU : Sélection de la colonne selon target_column
+            if self.target_column == "importance":
+                label = row.get("importance", "").lower()
+            else:
+                label = (
+                    row.get("label")
+                    or row.get("sentiment") 
+                    or row.get("impact")
+                    or ""
+                ).lower()
+            
             if not text or label not in self.LABEL_MAP:
                 continue
             out.append({"text": text, "label": self.LABEL_MAP[label]})
@@ -417,7 +451,7 @@ class Finetuner:
         if self.incremental_mode:
             run_name = f"incremental-{getattr(args, 'mode', 'test')}-{ts}"
         else:
-            run_name = f"finbert-{ts}"
+            run_name = f"finbert-{self.target_column}-{ts}"  # 🎯 Inclure target_column
 
         # 🚀 NOUVEAU : Arguments d'entraînement adaptés pour l'incrémental + petits datasets
         if self.incremental_mode:
@@ -466,7 +500,7 @@ class Finetuner:
             callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
         )
 
-        mode_info = "incremental" if self.incremental_mode else "classic"
+        mode_info = f"incremental-{self.target_column}" if self.incremental_mode else f"classic-{self.target_column}"
         logger.info(f"🔥 Start training for %d epochs (mode: %s)", epochs, mode_info)
         trainer.train()
         trainer.save_model()
@@ -489,10 +523,12 @@ class Finetuner:
             test_metrics = self.evaluate_on_test(test_ds)
             logger.info(f"📊 Métriques test: {test_metrics}")
 
-        # save a report (adapté pour mode incrémental)
+        # save a report (adapté pour mode incrémental + importance)
         report = {
             "model": self.model_name,
             "mode": "incremental" if self.incremental_mode else "classic",
+            "target_column": self.target_column,  # 🎯 NOUVEAU
+            "label_mapping": dict(self.LABEL_MAP),  # 🎯 NOUVEAU
             "epochs": epochs,
             "learning_rate": learning_rate,
             "validation_metrics": eval_res,
@@ -519,11 +555,11 @@ class Finetuner:
 
 
 # ---------------------------------------------------------------------------
-# CLI (adapté pour supporter l'incrémental)
+# CLI (adapté pour supporter l'incrémental + importance)
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental"
+        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental et support importance"
     )
     p.add_argument(
         "--dataset",
@@ -555,6 +591,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--hub_id", type=str, default=None, help="HF repo id (org/model)"
     )
     
+    # 🎯 NOUVEAU argument pour la colonne cible
+    p.add_argument("--target-column", choices=["label", "importance"], default="label",
+                   help="Colonne à utiliser pour l'entraînement (label=sentiment, importance=importance)")
+    
     # 🚀 NOUVEAUX arguments pour l'apprentissage incrémental
     p.add_argument("--incremental", action="store_true", 
                    help="Activer l'apprentissage incrémental")
@@ -571,7 +611,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Entrée principale (adaptée pour supporter l'incrémental)
+# Entrée principale (adaptée pour supporter l'incrémental + importance)
 # ---------------------------------------------------------------------------
 def main():
     args = build_parser().parse_args()
@@ -615,7 +655,8 @@ def main():
             model_name=args.model_name, 
             max_length=args.max_length,
             incremental_mode=True,
-            baseline_model=args.baseline_model
+            baseline_model=args.baseline_model,
+            target_column=args.target_column  # 🎯 NOUVEAU
         )
         
         # Chargement du dataset avec division train/val/test
@@ -734,10 +775,15 @@ def main():
                 model_name=args.model_name, 
                 max_length=args.max_length,
                 incremental_mode=True,
-                baseline_model=baseline_model
+                baseline_model=baseline_model,
+                target_column=args.target_column  # 🎯 NOUVEAU
             )
         else:
-            tuner = Finetuner(model_name=args.model_name, max_length=args.max_length)
+            tuner = Finetuner(
+                model_name=args.model_name, 
+                max_length=args.max_length,
+                target_column=args.target_column  # 🎯 NOUVEAU
+            )
 
         ds, _ = tuner.load_dataset(args.dataset)
         tuner.train(ds, args)
