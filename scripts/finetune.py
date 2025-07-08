@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental
-======================================================================
+TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + Class Balancing
+========================================================================================
 
 🚀 NOUVEAU : Apprentissage Incrémental !
 - Mode --incremental : Améliore un modèle existant au lieu de créer un nouveau
@@ -14,6 +15,11 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental
 - --target-column importance : Entraîne sur l'importance (critique/importante/générale)
 - --target-column label : Entraîne sur le sentiment (positive/negative/neutral)
 
+⚖️ NOUVEAU : Class Balancing !
+- --class-balancing weighted : Pondération automatique des classes
+- --class-balancing focal : Focal Loss pour classes déséquilibrées
+- Métriques F1 macro adaptées aux datasets déséquilibrés
+
 •  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
   en **positive / neutral / negative** ou **critique / importante / générale**.
 •  Découpe automatiquement en train / validation (80 / 20 stratifié).
@@ -21,12 +27,13 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental
   présent sur HuggingFace Hub.
 •  Produit un *training_report.json* + logs TensorBoard dans <output_dir>.
 
-Usage Sentiment (existant):
----------------------------
+Usage Sentiment avec Class Balancing:
+------------------------------------
 $ python finetune.py \
-    --dataset datasets/news_20250705.csv \
+    --dataset datasets/news_20250708.csv \
     --output_dir models/finbert-sentiment \
-    --target-column label
+    --target-column label \
+    --class-balancing weighted
 
 🎯 NOUVEAU - Usage Importance:
 -----------------------------
@@ -65,9 +72,11 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 from datasets import Dataset, DatasetDict
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score
 from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -119,7 +128,77 @@ logger = logging.getLogger("tradepulse-finetune")
 
 
 # ---------------------------------------------------------------------------
-# Fine‑tuner class (adapté pour supporter l'incrémental + importance)
+# ⚖️ NOUVEAU : Custom Loss avec Class Weighting et Focal Loss
+# ---------------------------------------------------------------------------
+class WeightedCrossEntropyLoss(nn.Module):
+    """Cross Entropy Loss avec pondération des classes"""
+    def __init__(self, class_weights):
+        super().__init__()
+        self.class_weights = torch.FloatTensor(class_weights)
+        
+    def forward(self, outputs, labels):
+        # Move class weights to same device as outputs
+        if outputs.is_cuda:
+            self.class_weights = self.class_weights.cuda()
+        
+        # Compute weighted cross entropy
+        loss_fn = nn.CrossEntropyLoss(weight=self.class_weights)
+        return loss_fn(outputs, labels)
+
+
+class FocalLoss(nn.Module):
+    """Focal Loss pour traiter les déséquilibres de classes"""
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        
+    def forward(self, outputs, labels):
+        ce_loss = nn.functional.cross_entropy(outputs, labels, reduction='none')
+        pt = torch.exp(-ce_loss)
+        
+        # Apply alpha weighting
+        if self.alpha is not None:
+            if isinstance(self.alpha, (float, int)):
+                alpha_t = self.alpha
+            else:
+                alpha_t = self.alpha[labels]
+            focal_loss = alpha_t * (1 - pt) ** self.gamma * ce_loss
+        else:
+            focal_loss = (1 - pt) ** self.gamma * ce_loss
+            
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
+
+class CustomTrainer(Trainer):
+    """Trainer personnalisé avec support des loss functions custom"""
+    def __init__(self, loss_fn=None, **kwargs):
+        super().__init__(**kwargs)
+        self.custom_loss_fn = loss_fn
+        
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.get("labels")
+        outputs = model(**inputs)
+        
+        if self.custom_loss_fn is not None:
+            loss = self.custom_loss_fn(outputs.logits, labels)
+        else:
+            # Use default loss
+            if hasattr(outputs, "loss") and outputs.loss is not None:
+                loss = outputs.loss
+            else:
+                loss = nn.functional.cross_entropy(outputs.logits, labels)
+                
+        return (loss, outputs) if return_outputs else loss
+
+
+# ---------------------------------------------------------------------------
+# Fine‑tuner class (adapté pour supporter l'incrémental + importance + class balancing)
 # ---------------------------------------------------------------------------
 class Finetuner:
     # 😊 Labels pour sentiment (existant)
@@ -131,12 +210,15 @@ class Finetuner:
     IMPORTANCE_ID2LABEL: Dict[int, str] = {v: k for k, v in IMPORTANCE_LABEL_MAP.items()}
 
     def __init__(self, model_name: str, max_length: int, incremental_mode: bool = False, 
-                 baseline_model: str = None, target_column: str = "label"):
+                 baseline_model: str = None, target_column: str = "label", 
+                 class_balancing: str = None):
         self.model_name = model_name
         self.max_length = max_length
         self.incremental_mode = incremental_mode
         self.baseline_model = baseline_model
         self.target_column = target_column  # 🎯 NOUVEAU
+        self.class_balancing = class_balancing  # ⚖️ NOUVEAU
+        self.class_weights = None  # ⚖️ NOUVEAU
         
         # 🎯 NOUVEAU : Sélection des labels selon la colonne cible
         if target_column == "importance":
@@ -147,6 +229,10 @@ class Finetuner:
             self.LABEL_MAP = self.SENTIMENT_LABEL_MAP
             self.ID2LABEL = self.SENTIMENT_ID2LABEL
             logger.info("😊 Mode entraînement : SENTIMENT (positive/negative/neutral)")
+        
+        # ⚖️ NOUVEAU : Info sur class balancing
+        if class_balancing:
+            logger.info(f"⚖️ Class balancing activé : {class_balancing}")
         
         if incremental_mode and baseline_model:
             # 🚀 NOUVEAU : Mode incrémental - charger modèle existant
@@ -185,6 +271,40 @@ class Finetuner:
             logger.info("✅ Model & tokenizer loaded : %s", model_name)
 
     # -------------------------------------------------------------------
+    # ⚖️ NOUVEAU : Méthodes de class balancing
+    # -------------------------------------------------------------------
+    def compute_class_weights(self, labels: List[int]) -> np.ndarray:
+        """Calcule les poids des classes pour l'équilibrage"""
+        unique_labels = np.unique(labels)
+        class_weights = compute_class_weight(
+            'balanced',
+            classes=unique_labels,
+            y=labels
+        )
+        
+        # Ensure weights are in correct order (0, 1, 2)
+        weight_dict = dict(zip(unique_labels, class_weights))
+        ordered_weights = [weight_dict.get(i, 1.0) for i in range(3)]
+        
+        logger.info(f"⚖️ Poids calculés: {dict(zip(range(3), ordered_weights))}")
+        return np.array(ordered_weights)
+
+    def create_loss_function(self, labels: List[int]):
+        """Crée la fonction de loss selon le type de balancing"""
+        if not self.class_balancing:
+            return None
+            
+        if self.class_balancing == "weighted":
+            self.class_weights = self.compute_class_weights(labels)
+            return WeightedCrossEntropyLoss(self.class_weights)
+        elif self.class_balancing == "focal":
+            self.class_weights = self.compute_class_weights(labels)
+            return FocalLoss(alpha=self.class_weights, gamma=2.0)
+        else:
+            logger.warning(f"⚠️ Type de balancing non reconnu: {self.class_balancing}")
+            return None
+
+    # -------------------------------------------------------------------
     # 🚀 NOUVEAU : Méthodes d'évaluation pour mode incrémental
     # -------------------------------------------------------------------
     def evaluate_on_test(self, test_dataset: Dataset) -> Dict[str, float]:
@@ -213,7 +333,7 @@ class Finetuner:
             args=eval_args,
             eval_dataset=eval_dataset,
             tokenizer=self.tokenizer,
-            compute_metrics=self._metrics,
+            compute_metrics=self._metrics_balanced,  # ⚖️ Utiliser métriques adaptées
         )
         
         metrics = trainer.evaluate()
@@ -222,6 +342,7 @@ class Finetuner:
         clean_metrics = {
             "accuracy": metrics.get("eval_accuracy", 0.0),
             "f1": metrics.get("eval_f1", 0.0),
+            "f1_macro": metrics.get("eval_f1_macro", 0.0),  # ⚖️ NOUVEAU
             "precision": metrics.get("eval_precision", 0.0),
             "recall": metrics.get("eval_recall", 0.0),
         }
@@ -234,21 +355,25 @@ class Finetuner:
         
         min_improvement = min_improvement or PERFORMANCE_THRESHOLDS["improvement_threshold"]
         
+        # ⚖️ NOUVEAU : Utiliser F1 macro pour datasets déséquilibrés
+        primary_metric = "f1_macro" if "f1_macro" in new_metrics else "f1"
+        primary_threshold = PERFORMANCE_THRESHOLDS["min_f1"]
+        
         # Vérification des seuils minimum
         if new_metrics["accuracy"] < PERFORMANCE_THRESHOLDS["min_accuracy"]:
             return False, f"Précision insuffisante: {new_metrics['accuracy']:.3f} < {PERFORMANCE_THRESHOLDS['min_accuracy']}"
         
-        if new_metrics["f1"] < PERFORMANCE_THRESHOLDS["min_f1"]:
-            return False, f"F1-score insuffisant: {new_metrics['f1']:.3f} < {PERFORMANCE_THRESHOLDS['min_f1']}"
+        if new_metrics[primary_metric] < primary_threshold:
+            return False, f"{primary_metric} insuffisant: {new_metrics[primary_metric]:.3f} < {primary_threshold}"
         
         # Vérification de l'amélioration
         accuracy_improvement = new_metrics["accuracy"] - baseline_metrics["accuracy"]
-        f1_improvement = new_metrics["f1"] - baseline_metrics["f1"]
+        f1_improvement = new_metrics[primary_metric] - baseline_metrics.get(primary_metric, baseline_metrics["f1"])
         
         if accuracy_improvement >= min_improvement or f1_improvement >= min_improvement:
-            return True, f"Amélioration détectée - Accuracy: +{accuracy_improvement:.3f}, F1: +{f1_improvement:.3f}"
+            return True, f"Amélioration détectée - Accuracy: +{accuracy_improvement:.3f}, {primary_metric}: +{f1_improvement:.3f}"
         
-        return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, F1: {f1_improvement:+.3f} (min: {min_improvement})"
+        return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
 
     def push_to_huggingface(self, model_path: Path, hf_model_id: str, commit_message: str = None):
         """Push le modèle vers HuggingFace Hub"""
@@ -332,6 +457,14 @@ class Finetuner:
         label_counts = Counter([d["label"] for d in data])
         
         logger.info(f"📊 Distribution des labels: {dict(label_counts)}")
+        
+        # ⚖️ NOUVEAU : Afficher les déséquilibres
+        if self.class_balancing:
+            total = sum(label_counts.values())
+            for label_id, count in label_counts.items():
+                label_name = self.ID2LABEL.get(label_id, f"label_{label_id}")
+                percentage = (count / total) * 100
+                logger.info(f"  {label_name}: {count} ({percentage:.1f}%)")
         
         # Vérifier que chaque classe a au moins 2 échantillons
         min_samples = min(label_counts.values()) if label_counts else 0
@@ -442,10 +575,11 @@ class Finetuner:
         return DatasetDict(train=train_ds, validation=val_ds), test_ds
 
     # -------------------------------------------------------------------
-    # Metrics (existant, conservé)
+    # Metrics (⚖️ NOUVEAU : Métriques adaptées aux datasets déséquilibrés)
     # -------------------------------------------------------------------
     @staticmethod
     def _metrics(pred: EvalPrediction) -> Dict[str, float]:
+        """Métriques standard (conservées pour compatibilité)"""
         logits, labels = pred
         preds = np.argmax(logits, axis=1)
         prec, rec, f1, _ = precision_recall_fscore_support(
@@ -454,8 +588,36 @@ class Finetuner:
         acc = accuracy_score(labels, preds)
         return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
+    @staticmethod
+    def _metrics_balanced(pred: EvalPrediction) -> Dict[str, float]:
+        """⚖️ NOUVEAU : Métriques adaptées aux datasets déséquilibrés"""
+        logits, labels = pred
+        preds = np.argmax(logits, axis=1)
+        
+        # Métriques weighted (existant)
+        prec_weighted, rec_weighted, f1_weighted, _ = precision_recall_fscore_support(
+            labels, preds, average="weighted"
+        )
+        
+        # ⚖️ NOUVEAU : Métriques macro (toutes les classes équivalentes)
+        prec_macro, rec_macro, f1_macro, _ = precision_recall_fscore_support(
+            labels, preds, average="macro"
+        )
+        
+        acc = accuracy_score(labels, preds)
+        
+        return {
+            "accuracy": acc,
+            "precision": prec_weighted,
+            "recall": rec_weighted,
+            "f1": f1_weighted,
+            "f1_macro": f1_macro,  # ⚖️ Métrique principale pour datasets déséquilibrés
+            "precision_macro": prec_macro,
+            "recall_macro": rec_macro,
+        }
+
     # -------------------------------------------------------------------
-    # Training (adapté pour supporter l'incrémental + petits datasets)
+    # Training (adapté pour supporter l'incrémental + petits datasets + class balancing)
     # -------------------------------------------------------------------
     def train(self, ds: DatasetDict, args: argparse.Namespace, test_ds: Dataset = None):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -465,6 +627,14 @@ class Finetuner:
             run_name = f"incremental-{getattr(args, 'mode', 'test')}-{ts}"
         else:
             run_name = f"finbert-{self.target_column}-{ts}"  # 🎯 Inclure target_column
+
+        # ⚖️ NOUVEAU : Créer la fonction de loss pour class balancing
+        custom_loss_fn = None
+        if self.class_balancing and len(ds["train"]) > 0:
+            train_labels = ds["train"]["labels"]
+            custom_loss_fn = self.create_loss_function(train_labels)
+            if custom_loss_fn:
+                logger.info(f"⚖️ Loss function personnalisée: {type(custom_loss_fn).__name__}")
 
         # 🚀 NOUVEAU : Arguments d'entraînement adaptés pour l'incrémental + petits datasets
         if self.incremental_mode:
@@ -480,6 +650,9 @@ class Finetuner:
             batch_size = min(8, args.train_bs)  # Adapter la taille de batch
             patience = 2
 
+        # ⚖️ NOUVEAU : Utiliser F1 macro comme métrique principale si class balancing
+        primary_metric = "f1_macro" if self.class_balancing else "f1"
+
         targs = TrainingArguments(
             output_dir=args.output_dir,
             num_train_epochs=epochs,
@@ -491,7 +664,7 @@ class Finetuner:
             evaluation_strategy="epoch" if len(ds["validation"]) > 0 else "no",
             save_strategy="epoch",
             load_best_model_at_end=len(ds["validation"]) > 0,
-            metric_for_best_model="f1" if len(ds["validation"]) > 0 else None,
+            metric_for_best_model=primary_metric if len(ds["validation"]) > 0 else None,
             greater_is_better=True,
             logging_dir=os.path.join(args.output_dir, "logs"),
             logging_steps=max(1, args.logging_steps // 10),  # Plus de logs pour petits datasets
@@ -503,15 +676,28 @@ class Finetuner:
             dataloader_drop_last=False,  # Ne pas ignorer les derniers échantillons
         )
 
-        trainer = Trainer(
-            model=self.model,
-            args=targs,
-            train_dataset=ds["train"],
-            eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
-            tokenizer=self.tokenizer,
-            compute_metrics=self._metrics if len(ds["validation"]) > 0 else None,
-            callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
-        )
+        # ⚖️ NOUVEAU : Utiliser CustomTrainer si loss personnalisée
+        if custom_loss_fn:
+            trainer = CustomTrainer(
+                loss_fn=custom_loss_fn,
+                model=self.model,
+                args=targs,
+                train_dataset=ds["train"],
+                eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
+                tokenizer=self.tokenizer,
+                compute_metrics=self._metrics_balanced if len(ds["validation"]) > 0 else None,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
+            )
+        else:
+            trainer = Trainer(
+                model=self.model,
+                args=targs,
+                train_dataset=ds["train"],
+                eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
+                tokenizer=self.tokenizer,
+                compute_metrics=self._metrics_balanced if len(ds["validation"]) > 0 else None,
+                callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
+            )
 
         mode_info = f"incremental-{self.target_column}" if self.incremental_mode else f"classic-{self.target_column}"
         logger.info(f"🔥 Start training for %d epochs (mode: %s)", epochs, mode_info)
@@ -520,14 +706,15 @@ class Finetuner:
 
         if len(ds["validation"]) > 0:
             eval_res = trainer.evaluate()
+            f1_score_val = eval_res.get(f"eval_{primary_metric}", eval_res.get("eval_f1", 0.0))
             logger.info(
                 "✅ Training complete — F1: %.4f | Acc: %.4f",
-                eval_res["eval_f1"],
+                f1_score_val,
                 eval_res["eval_accuracy"],
             )
         else:
             logger.info("✅ Training complete (no validation data)")
-            eval_res = {"eval_f1": 0.0, "eval_accuracy": 0.0}
+            eval_res = {"eval_f1": 0.0, "eval_accuracy": 0.0, f"eval_{primary_metric}": 0.0}
 
         # 🚀 NOUVEAU : Évaluation sur le dataset de test pour mode incrémental
         test_metrics = None
@@ -536,12 +723,14 @@ class Finetuner:
             test_metrics = self.evaluate_on_test(test_ds)
             logger.info(f"📊 Métriques test: {test_metrics}")
 
-        # save a report (adapté pour mode incrémental + importance)
+        # save a report (adapté pour mode incrémental + importance + class balancing)
         report = {
             "model": self.model_name,
             "mode": "incremental" if self.incremental_mode else "classic",
             "target_column": self.target_column,  # 🎯 NOUVEAU
             "label_mapping": dict(self.LABEL_MAP),  # 🎯 NOUVEAU
+            "class_balancing": self.class_balancing,  # ⚖️ NOUVEAU
+            "class_weights": self.class_weights.tolist() if self.class_weights is not None else None,  # ⚖️ NOUVEAU
             "epochs": epochs,
             "learning_rate": learning_rate,
             "validation_metrics": eval_res,
@@ -568,11 +757,11 @@ class Finetuner:
 
 
 # ---------------------------------------------------------------------------
-# CLI (adapté pour supporter l'incrémental + importance)
+# CLI (adapté pour supporter l'incrémental + importance + class balancing)
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental et support importance"
+        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental, support importance et class balancing"
     )
     p.add_argument(
         "--dataset",
@@ -608,6 +797,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-column", choices=["label", "importance"], default="label",
                    help="Colonne à utiliser pour l'entraînement (label=sentiment, importance=importance)")
     
+    # ⚖️ NOUVEAU : Arguments pour class balancing
+    p.add_argument("--class-balancing", choices=["weighted", "focal"], default=None,
+                   help="Type d'équilibrage des classes (weighted=pondération, focal=focal loss)")
+    
     # 🚀 NOUVEAUX arguments pour l'apprentissage incrémental
     p.add_argument("--incremental", action="store_true", 
                    help="Activer l'apprentissage incrémental")
@@ -624,7 +817,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Entrée principale (adaptée pour supporter l'incrémental + importance)
+# Entrée principale (adaptée pour supporter l'incrémental + importance + class balancing)
 # ---------------------------------------------------------------------------
 def main():
     args = build_parser().parse_args()
@@ -669,7 +862,8 @@ def main():
             max_length=args.max_length,
             incremental_mode=True,
             baseline_model=args.baseline_model,
-            target_column=args.target_column  # 🎯 NOUVEAU
+            target_column=args.target_column,  # 🎯 NOUVEAU
+            class_balancing=args.class_balancing  # ⚖️ NOUVEAU
         )
         
         # Chargement du dataset avec division train/val/test
@@ -684,7 +878,7 @@ def main():
         else:
             logger.warning("⚠️ Pas de dataset de test pour évaluation baseline")
             # Métriques factices pour le test
-            baseline_metrics = {"accuracy": 0.5, "f1": 0.5, "precision": 0.5, "recall": 0.5}
+            baseline_metrics = {"accuracy": 0.5, "f1": 0.5, "f1_macro": 0.5, "precision": 0.5, "recall": 0.5}
         
         # Entraînement incrémental
         test_metrics = tuner.train(ds, args, test_ds)
@@ -711,7 +905,7 @@ def main():
                 # Mise à jour du modèle sur HuggingFace
                 if args.mode in ["production", "development"]:
                     hf_model_id = MODELS_CONFIG[args.mode]["hf_id"]
-                    commit_msg = f"Apprentissage incrémental - Accuracy: {test_metrics['accuracy']:.3f}, F1: {test_metrics['f1']:.3f}"
+                    commit_msg = f"Apprentissage incrémental - Accuracy: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
                     
                     logger.info(f"🚀 Mise à jour du modèle {args.mode}: {hf_model_id}")
                     tuner.push_to_huggingface(args.output_dir, hf_model_id, commit_msg)
@@ -758,7 +952,7 @@ def main():
                     
                     report.update({
                         "baseline_metrics": baseline_metrics,
-                        "new_metrics": test_metrics or {"accuracy": 0.0, "f1": 0.0},
+                        "new_metrics": test_metrics or {"accuracy": 0.0, "f1": 0.0, "f1_macro": 0.0},
                         "model_updated": should_update,
                         "update_reason": "Force update - petit dataset",
                         "hf_model_id": hf_model_id,
@@ -789,13 +983,15 @@ def main():
                 max_length=args.max_length,
                 incremental_mode=True,
                 baseline_model=baseline_model,
-                target_column=args.target_column  # 🎯 NOUVEAU
+                target_column=args.target_column,  # 🎯 NOUVEAU
+                class_balancing=args.class_balancing  # ⚖️ NOUVEAU
             )
         else:
             tuner = Finetuner(
                 model_name=args.model_name, 
                 max_length=args.max_length,
-                target_column=args.target_column  # 🎯 NOUVEAU
+                target_column=args.target_column,  # 🎯 NOUVEAU
+                class_balancing=args.class_balancing  # ⚖️ NOUVEAU
             )
 
         ds, _ = tuner.load_dataset(args.dataset)
