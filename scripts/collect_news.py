@@ -34,11 +34,11 @@ logger = logging.getLogger("smart-collector")
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
 
-# 🎯 MODÈLES SPÉCIALISÉS (auto-détection workflow)
+# 🎯 MODÈLES SPÉCIALISÉS PRODUITS PAR LE WORKFLOW
 ML_MODELS_CONFIG = {
-    "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # Modèle sentiment spécialisé
-    "importance": "Bencode92/tradepulse-finbert-importance",  # Modèle importance spécialisé
-    "fallback": "yiyanghkust/finbert-tone",                   # Fallback
+    "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # ✅ Modèle sentiment entraîné
+    "importance": "Bencode92/tradepulse-finbert-importance",  # ✅ Modèle importance entraîné  
+    "fallback": "yiyanghkust/finbert-tone",                   # Fallback de base
 }
 
 # Configuration importance (reprend de fmp_news_updater.py)
@@ -86,7 +86,7 @@ FMP_LIMITS = {
 }
 
 class SmartNewsCollector:
-    """Collecteur avec double ML (sentiment + importance)"""
+    """Collecteur avec double ML (sentiment + importance) - MODÈLES PRODUITS"""
     
     def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, 
                  auto_label: bool = False, confidence_threshold: float = 0.75):
@@ -139,7 +139,7 @@ class SmartNewsCollector:
             logger.warning(f"Erreur sauvegarde cache: {e}")
 
     def _load_ml_models(self):
-        """🎯 Charge les 2 modèles spécialisés (sentiment + importance)"""
+        """🎯 Charge les 2 modèles spécialisés PRODUITS par le workflow"""
         try:
             from transformers import pipeline
             import torch
@@ -148,9 +148,9 @@ class SmartNewsCollector:
             model_kwargs = {"token": hf_token} if hf_token else {}
             device = 0 if torch.cuda.is_available() else -1
             
-            # 1. Modèle sentiment
+            # 1. Modèle sentiment PRODUIT
             try:
-                logger.info(f"😊 Chargement modèle sentiment: {ML_MODELS_CONFIG['sentiment']}")
+                logger.info(f"😊 Chargement modèle sentiment PRODUIT: {ML_MODELS_CONFIG['sentiment']}")
                 self.sentiment_classifier = pipeline(
                     "text-classification",
                     model=ML_MODELS_CONFIG["sentiment"],
@@ -158,7 +158,7 @@ class SmartNewsCollector:
                     device=device,
                     **model_kwargs
                 )
-                logger.info("✅ Modèle sentiment chargé")
+                logger.info("✅ Modèle sentiment PRODUIT chargé")
             except Exception as e:
                 logger.warning(f"⚠️ Fallback sentiment: {e}")
                 self.sentiment_classifier = pipeline(
@@ -168,9 +168,9 @@ class SmartNewsCollector:
                     device=device
                 )
             
-            # 2. Modèle importance
+            # 2. Modèle importance PRODUIT
             try:
-                logger.info(f"🎯 Chargement modèle importance: {ML_MODELS_CONFIG['importance']}")
+                logger.info(f"🎯 Chargement modèle importance PRODUIT: {ML_MODELS_CONFIG['importance']}")
                 self.importance_classifier = pipeline(
                     "text-classification",
                     model=ML_MODELS_CONFIG["importance"],
@@ -178,7 +178,7 @@ class SmartNewsCollector:
                     device=device,
                     **model_kwargs
                 )
-                logger.info("✅ Modèle importance chargé")
+                logger.info("✅ Modèle importance PRODUIT chargé")
             except Exception as e:
                 logger.warning(f"⚠️ Pas de modèle importance, utilisation règles: {e}")
                 self.importance_classifier = None
@@ -189,10 +189,10 @@ class SmartNewsCollector:
             self.importance_classifier = None
 
     def _predict_dual_labels(self, text: str) -> Tuple[str, str, float, float]:
-        """🎯 Prédit sentiment ET importance avec les modèles spécialisés"""
+        """🎯 Prédit sentiment ET importance avec les modèles PRODUITS"""
         text_truncated = text[:512]
         
-        # 1. Prédiction sentiment
+        # 1. Prédiction sentiment avec modèle PRODUIT
         sentiment_label = "neutral"
         sentiment_confidence = 0.5
         
@@ -201,7 +201,7 @@ class SmartNewsCollector:
                 results = self.sentiment_classifier(text_truncated)
                 best_pred = max(results[0], key=lambda x: x['score'])
                 
-                # Normalisation labels sentiment
+                # Normalisation labels sentiment (spécialisé PRODUIT)
                 label_mapping = {
                     'POSITIVE': 'positive', 'NEGATIVE': 'negative', 'NEUTRAL': 'neutral',
                     'positive': 'positive', 'negative': 'negative', 'neutral': 'neutral',
@@ -217,7 +217,7 @@ class SmartNewsCollector:
         else:
             sentiment_label = self._basic_sentiment_analysis(text)
         
-        # 2. Prédiction importance
+        # 2. Prédiction importance avec modèle PRODUIT
         importance_label = "générale"
         importance_confidence = 0.5
         
@@ -226,7 +226,7 @@ class SmartNewsCollector:
                 results = self.importance_classifier(text_truncated)
                 best_pred = max(results[0], key=lambda x: x['score'])
                 
-                # Normalisation labels importance
+                # Normalisation labels importance (spécialisé PRODUIT)
                 importance_mapping = {
                     'critique': 'critique', 'importante': 'importante', 'générale': 'générale',
                     'LABEL_0': 'générale', 'LABEL_1': 'importante', 'LABEL_2': 'critique',
@@ -244,7 +244,7 @@ class SmartNewsCollector:
         return sentiment_label, importance_label, sentiment_confidence, importance_confidence
 
     def _basic_sentiment_analysis(self, text: str) -> str:
-        """Analyse de sentiment basique"""
+        """Analyse de sentiment basique (fallback)"""
         text_lower = text.lower()
         
         positive_words = ["gain", "rise", "surge", "rally", "beat", "growth", "strong", "bullish"]
@@ -261,7 +261,7 @@ class SmartNewsCollector:
             return "neutral"
 
     def _basic_importance_analysis(self, text: str) -> str:
-        """🎯 Analyse d'importance basique avec mots-clés"""
+        """🎯 Analyse d'importance basique avec mots-clés (fallback)"""
         text_lower = text.lower()
         
         high_score = sum(1 for kw in KEYWORD_TIERS["high"] if kw in text_lower)
@@ -402,7 +402,7 @@ class SmartNewsCollector:
         return all_articles[:count]
 
     def _enrich_article(self, article: Dict, source_type: str) -> Optional[Dict]:
-        """🎯 Enrichit un article avec double labellisation"""
+        """🎯 Enrichit un article avec double labellisation des MODÈLES PRODUITS"""
         try:
             title = article.get("title", "")
             content = article.get("text", "") or article.get("content", "")
@@ -422,7 +422,7 @@ class SmartNewsCollector:
                 "source_type": source_type
             }
             
-            # 🎯 Double prédiction (sentiment + importance)
+            # 🎯 Double prédiction avec MODÈLES PRODUITS
             if self.auto_label:
                 sentiment_label, importance_label, sent_conf, imp_conf = self._predict_dual_labels(enriched["text"])
                 
@@ -434,7 +434,7 @@ class SmartNewsCollector:
                     "needs_review": sent_conf < self.confidence_threshold or imp_conf < self.confidence_threshold,
                     "sentiment_model": ML_MODELS_CONFIG["sentiment"] if self.sentiment_classifier else "rule_based",
                     "importance_model": ML_MODELS_CONFIG["importance"] if self.importance_classifier else "rule_based",
-                    "labeling_method": "dual_ml_auto"
+                    "labeling_method": "dual_ml_produit"
                 })
             else:
                 sentiment_label = self._basic_sentiment_analysis(enriched["text"])
@@ -466,7 +466,7 @@ class SmartNewsCollector:
         
         score = min(20, title_len / 5) + min(30, text_len / 100)
         
-        # Bonus confiance ML
+        # Bonus confiance ML des MODÈLES PRODUITS
         if article.get("sentiment_confidence"):
             score += article["sentiment_confidence"] * 10
         if article.get("importance_confidence"):
@@ -485,7 +485,7 @@ class SmartNewsCollector:
         return min(100, score)
 
     def save_dataset(self, articles: List[Dict], output_file: Optional[Path] = None) -> Path:
-        """🎯 Sauvegarde avec 3 colonnes: text, label, importance"""
+        """🎯 Sauvegarde avec 3 colonnes: text, label, importance (MODÈLES PRODUITS)"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
@@ -514,7 +514,7 @@ class SmartNewsCollector:
         metadata = {
             "filename": output_file.name,
             "created_at": datetime.datetime.now(PARIS_TZ).isoformat(),
-            "source": "fmp_smart",
+            "source": "fmp_smart_produit",
             "article_count": len(articles),
             "label_distribution": label_counts,
             "importance_distribution": importance_counts,
@@ -525,7 +525,8 @@ class SmartNewsCollector:
             "importance_model": ML_MODELS_CONFIG["importance"] if self.auto_label else None,
             "confidence_threshold": self.confidence_threshold if self.auto_label else None,
             "high_confidence_articles": len(articles) - needs_review_count,
-            "needs_review_articles": needs_review_count
+            "needs_review_articles": needs_review_count,
+            "models_source": "workflow_produit"  # Indique que les modèles viennent du workflow
         }
 
         json_file = output_file.with_suffix('.json')
@@ -535,15 +536,17 @@ class SmartNewsCollector:
         # Sauvegarde cache
         self._save_cache()
 
-        logger.info(f"✅ Dataset Smart: {output_file} ({len(articles)} échantillons)")
+        logger.info(f"✅ Dataset Smart PRODUIT: {output_file} ({len(articles)} échantillons)")
         return output_file
 
     def collect_and_save(self, count: int = 40, days: int = 7, output_file: Optional[Path] = None) -> Path:
-        """🎯 Pipeline complet de collecte Smart (sentiment + importance)"""
-        logger.info(f"🚀 Collecte Smart: {count} articles, {days} jours")
+        """🎯 Pipeline complet avec MODÈLES PRODUITS (sentiment + importance)"""
+        logger.info(f"🚀 Collecte Smart PRODUIT: {count} articles, {days} jours")
         
         if self.auto_label:
-            logger.info(f"🎯 Double ML activé: sentiment + importance")
+            logger.info(f"🎯 Double ML PRODUIT activé: sentiment + importance")
+            logger.info(f"😊 Modèle sentiment: {ML_MODELS_CONFIG['sentiment']}")
+            logger.info(f"🎯 Modèle importance: {ML_MODELS_CONFIG['importance']}")
 
         # Collecte
         articles = self.collect_fmp_news(count, days)
@@ -565,13 +568,13 @@ class SmartNewsCollector:
         if self.auto_label:
             needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
             high_confidence_count = len(articles) - needs_review_count
-            logger.info(f"🎯 Articles haute confiance: {high_confidence_count}/{len(articles)}")
+            logger.info(f"🎯 Articles haute confiance PRODUIT: {high_confidence_count}/{len(articles)}")
 
         return self.save_dataset(articles, output_file)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Smart News Collector with Dual ML Labeling")
+    parser = argparse.ArgumentParser(description="Smart News Collector with PRODUCTION Dual ML Models")
     
     parser.add_argument("--source", choices=["fmp"], default="fmp", help="Source FMP")
     parser.add_argument("--count", type=int, default=40, help="Nombre d'articles")
@@ -581,7 +584,7 @@ def main():
     parser.add_argument("--no-cache", action="store_true", help="Désactiver déduplication")
     
     # Arguments ML
-    parser.add_argument("--auto-label", action="store_true", help="Activer double ML labeling")
+    parser.add_argument("--auto-label", action="store_true", help="Activer double ML labeling PRODUIT")
     parser.add_argument("--confidence-threshold", type=float, default=0.75, 
                        help="Seuil de confiance ML")
 
@@ -606,15 +609,17 @@ def main():
             output_file=args.output
         )
 
-        print(f"✅ Dataset Smart généré: {output_file}")
+        print(f"✅ Dataset Smart PRODUIT généré: {output_file}")
         print(f"🎯 Colonnes: text, label (sentiment), importance")
         
         if args.auto_label:
-            print(f"🤖 Double ML: sentiment + importance")
+            print(f"🤖 Double ML PRODUIT:")
+            print(f"  😊 Sentiment: {ML_MODELS_CONFIG['sentiment']}")
+            print(f"  🎯 Importance: {ML_MODELS_CONFIG['importance']}")
         
         print("\n🚀 Prochaines étapes:")
         print(f"  1. Éditer: open news_editor.html")
-        print(f"  2. Commit: déclenche auto-training dual")
+        print(f"  2. Commit: réentraîne les modèles avec nouvelles données")
 
     except Exception as e:
         logger.error(f"❌ Erreur: {e}")
