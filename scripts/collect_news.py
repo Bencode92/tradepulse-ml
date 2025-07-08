@@ -51,9 +51,9 @@ FMP_LIMITS = {
     "press_releases": 5
 }
 
-# ML Models configuration - UPDATED with your actual model
+# ML Models configuration - FIXED: Utilise le modèle fixe maintenant
 ML_MODELS_CONFIG = {
-    "production": "Bencode92/tradepulse-finbert-yiyanghkust-finbert-tone-20250707_162528",
+    "production": "Bencode92/tradepulse-finbert-prod",      # ✅ MODÈLE FIXE!
     "development": "Bencode92/tradepulse-finbert-dev", 
     "fallback": "yiyanghkust/finbert-tone",
 }
