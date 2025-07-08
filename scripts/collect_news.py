@@ -264,23 +264,18 @@ class SmartNewsCollector:
             return "neutral"
 
     def _basic_importance_analysis(self, text: str) -> str:
-        """🔧 CORRIGÉ: Distribution équilibrée avec algorithme strict"""
+        """🎯 Analyse d'importance basique avec mots-clés (fallback)"""
         text_lower = text.lower()
         
         high_score = sum(1 for kw in KEYWORD_TIERS["high"] if kw in text_lower)
         medium_score = sum(1 for kw in KEYWORD_TIERS["medium"] if kw in text_lower)
         
-        # 🎯 NOUVELLES RÈGLES PLUS STRICTES
-        if high_score >= 3:  # Au lieu de 2
+        if high_score >= 2:
             return "critique"
-        elif high_score >= 2 or medium_score >= 5:  # Au lieu de 1 ou 3
-            return "importante"
-        elif any(word in text_lower for word in ["fed", "inflation", "recession", "crisis"]):
-            return "importante"  # Mots-clés spéciaux
-        elif len(text_lower) > 800:  # Articles longs = plus importants
+        elif high_score >= 1 or medium_score >= 3:
             return "importante"
         else:
-            return "générale"  # Maintenant atteignable !
+            return "générale"
 
     def _article_hash(self, text: str) -> str:
         """Génère un hash unique pour un article"""
