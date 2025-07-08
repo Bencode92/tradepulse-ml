@@ -75,7 +75,7 @@
         <span id="status" class="text-sm text-gray-300 ml-auto flex items-center"></span>
       </div>
 
-      <!-- Statistiques CORRIGÉES -->
+      <!-- Statistiques AVEC ACCENTS FIXES -->
       <div id="statsPanel" class="hidden grid md:grid-cols-7 gap-4">
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-blue-400" id="totalRows">0</div>
@@ -94,7 +94,7 @@
           <div class="text-2xl font-bold text-gray-400" id="neutralCount">0</div>
           <div class="text-sm text-gray-300">Neutres</div>
         </div>
-        <!-- Stats importance CORRIGÉES -->
+        <!-- Stats importance FIXES -->
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-red-400" id="critiqueCount">0</div>
           <div class="text-sm text-gray-300">Critiques</div>
@@ -120,7 +120,7 @@
     </div>
 
     <script>
-      // 🎯 COULEURS CORRIGÉES
+      // 🔧 COULEURS AVEC NORMALISATION D'ACCENTS
       const labelColors = {
         positive: 'text-green-400',
         neutral:  'text-gray-400',
@@ -130,10 +130,45 @@
       const importanceColors = {
         critique: 'text-red-400',
         importante: 'text-yellow-400', 
-        générale: 'text-green-400'
+        générale: 'text-green-400',
+        generale: 'text-green-400'  // Fallback sans accent
       };
 
-      // 🔧 DEBUG: Fonction pour afficher l'état
+      // 🔧 NORMALISATION DES ACCENTS
+      function normalizeImportance(value) {
+        if (!value) return 'générale';
+        const normalized = value.toLowerCase().trim();
+        
+        // Mapping avec et sans accents
+        const mapping = {
+          'critique': 'critique',
+          'importante': 'importante',
+          'générale': 'générale',
+          'generale': 'générale',  // Sans accent → avec accent
+          'general': 'générale',
+          'generales': 'générale'
+        };
+        
+        return mapping[normalized] || 'générale';
+      }
+
+      function normalizeSentiment(value) {
+        if (!value) return 'neutral';
+        const normalized = value.toLowerCase().trim();
+        
+        const mapping = {
+          'positive': 'positive',
+          'negative': 'negative', 
+          'neutral': 'neutral',
+          'positif': 'positive',
+          'negatif': 'negative',
+          'neutre': 'neutral'
+        };
+        
+        return mapping[normalized] || 'neutral';
+      }
+
+      // 🔧 DEBUG avec normalisation
       function updateDebugInfo() {
         const debug = document.getElementById('debugInfo');
         if (!rows.length) {
@@ -146,8 +181,8 @@
         const importanceDist = {};
         
         rows.forEach(row => {
-          const label = (row.label || 'neutral').toLowerCase();
-          const importance = (row.importance || 'générale').toLowerCase();
+          const label = normalizeSentiment(row.label);
+          const importance = normalizeImportance(row.importance);
           
           sentimentDist[label] = (sentimentDist[label] || 0) + 1;
           if (hasImportance) {
@@ -187,7 +222,7 @@
       let currentFilename = '';
       let currentSha = null;
 
-      // 🎯 VALIDATION CORRIGÉE
+      // 🔧 VALIDATION avec normalisation
       function validateDataset() {
         const issues = [];
         const stats = { positive: 0, negative: 0, neutral: 0, invalid_sentiment: 0 };
@@ -198,21 +233,19 @@
         
         if (hasImportance) requiredHeaders.push('importance');
         
-        // Vérifier colonnes
         for (const header of requiredHeaders) {
           if (!headers.includes(header)) {
             issues.push(`❌ Colonne "${header}" requise`);
           }
         }
         
-        // 🔧 VALIDATION STRICTE
         rows.forEach((row, idx) => {
           if (!row.text || row.text.trim().length < 10) {
             issues.push(`⚠️ Ligne ${idx + 1}: texte trop court`);
           }
           
-          // Sentiment
-          const label = (row.label || '').toLowerCase();
+          // Sentiment avec normalisation
+          const label = normalizeSentiment(row.label);
           const validSentiments = ['positive', 'negative', 'neutral'];
           if (validSentiments.includes(label)) {
             stats[label]++;
@@ -221,9 +254,9 @@
             issues.push(`❌ Ligne ${idx + 1}: sentiment "${row.label}" invalide`);
           }
           
-          // 🎯 IMPORTANCE STRICTE
+          // Importance avec normalisation
           if (hasImportance) {
-            const importance = (row.importance || '').toLowerCase();
+            const importance = normalizeImportance(row.importance);
             const validImportance = ['critique', 'importante', 'générale'];
             if (validImportance.includes(importance)) {
               importanceStats[importance]++;
@@ -234,7 +267,7 @@
           }
         });
         
-        // Affichage détaillé
+        // Affichage
         let html = `<div class="grid md:grid-cols-2 gap-4">`;
         html += `<div>`;
         html += `<h4 class="font-medium text-white mb-2">📊 Statistiques</h4>`;
@@ -271,7 +304,7 @@
         return issues.length === 0;
       }
 
-      // 🎯 STATS CORRIGÉES
+      // 🔧 STATS avec normalisation
       function updateStats() {
         if (!rows.length) return;
         
@@ -279,8 +312,8 @@
         const importanceStats = { critique: 0, importante: 0, générale: 0 };
         
         rows.forEach(row => {
-          const label = (row.label || 'neutral').toLowerCase();
-          const importance = (row.importance || 'générale').toLowerCase();
+          const label = normalizeSentiment(row.label);
+          const importance = normalizeImportance(row.importance);
           
           if (sentimentStats.hasOwnProperty(label)) sentimentStats[label]++;
           if (importanceStats.hasOwnProperty(importance)) importanceStats[importance]++;
@@ -299,7 +332,7 @@
         updateDebugInfo();
       }
 
-      // 🎯 RENDU TABLEAU CORRIGÉ
+      // 🔧 RENDU avec normalisation
       function renderTable() {
         if (!headers.length) return;
 
@@ -321,7 +354,7 @@
 
           headers.forEach(h => {
             if (h === 'label') {
-              const val = (row.label || 'neutral').toLowerCase();
+              const val = normalizeSentiment(row.label);
               const color = labelColors[val] || 'text-gray-400';
 
               html += `
@@ -334,7 +367,7 @@
                   </select>
                 </td>`;
             } else if (h === 'importance') {
-              const val = (row.importance || 'générale').toLowerCase();
+              const val = normalizeImportance(row.importance);
               const color = importanceColors[val] || 'text-gray-400';
               
               html += `
@@ -367,7 +400,7 @@
         html += `</tbody></table>`;
         tableWrapper.innerHTML = html;
 
-        // 🔧 LISTENERS CORRIGÉS
+        // 🔧 LISTENERS avec normalisation
         tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
           cell.addEventListener('input', () => {
             const r = +cell.dataset.row, c = cell.dataset.col;
@@ -377,7 +410,6 @@
           });
         });
 
-        // 🎯 LISTENERS IMPORTANCE FIXES
         tableWrapper.querySelectorAll('select[data-type]').forEach(sel => {
           sel.addEventListener('change', () => {
             const r = +sel.dataset.row;
@@ -386,23 +418,24 @@
             
             if (type === 'importance') {
               rows[r].importance = newValue;
-              // 🔧 Correction couleur immédiate
+              const normalized = normalizeImportance(newValue);
               const colors = Object.values(importanceColors);
               sel.classList.remove(...colors);
               sel.parentElement.classList.remove(...colors);
               
-              const newColor = importanceColors[newValue];
+              const newColor = importanceColors[normalized];
               sel.classList.add(newColor);
               sel.parentElement.classList.add(newColor);
               
               statusSpan.textContent = `Ligne ${r + 1}: importance ➜ ${newValue}`;
             } else {
               rows[r].label = newValue;
+              const normalized = normalizeSentiment(newValue);
               const colors = Object.values(labelColors);
               sel.classList.remove(...colors);
               sel.parentElement.classList.remove(...colors);
               
-              const newColor = labelColors[newValue];
+              const newColor = labelColors[normalized];
               sel.classList.add(newColor);
               sel.parentElement.classList.add(newColor);
               
@@ -443,13 +476,17 @@
             headers = res.meta.fields; 
             rows = res.data;
             
-            // 🔧 Nettoyage des données
+            // 🔧 Nettoyage avec normalisation
             rows = rows.map(row => {
               if (!row.importance && headers.includes('importance')) {
                 row.importance = 'générale';
+              } else if (row.importance) {
+                row.importance = normalizeImportance(row.importance);
               }
               if (!row.label) {
                 row.label = 'neutral';
+              } else {
+                row.label = normalizeSentiment(row.label);
               }
               return row;
             });
@@ -468,7 +505,6 @@
         });
       }
 
-      // 🔧 AJOUT LIGNE CORRIGÉ
       addRowBtn.addEventListener('click', () => {
         const obj = {}; 
         headers.forEach(h => {
@@ -547,13 +583,17 @@
           headers = res.meta.fields; 
           rows = res.data;
           
-          // 🔧 Nettoyage GitHub
+          // 🔧 Nettoyage GitHub avec normalisation
           rows = rows.map(row => {
             if (!row.importance && headers.includes('importance')) {
               row.importance = 'générale';
+            } else if (row.importance) {
+              row.importance = normalizeImportance(row.importance);
             }
             if (!row.label) {
               row.label = 'neutral';
+            } else {
+              row.label = normalizeSentiment(row.label);
             }
             return row;
           });
@@ -591,7 +631,6 @@
         }
       });
 
-      // Déclencher workflow
       triggerWorkflowBtn.addEventListener('click', async () => {
         try {
           ghStatus.textContent = '🚀 Déclenchement du workflow...';
@@ -619,7 +658,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 Éditeur corrigé - Importance fixée');
+        console.log('🔧 HTML ACCENT-SAFE chargé');
       });
     </script>
   </body>
