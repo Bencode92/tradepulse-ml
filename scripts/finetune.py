@@ -298,19 +298,32 @@ class Finetuner:
                 f"{row.get('title', '')} {row.get('content', '')}"
             ).strip()
             
-            # 🎯 NOUVEAU : Sélection de la colonne selon target_column
+            # 🔧 FIX : Nettoyage robuste des labels
             if self.target_column == "importance":
-                label = row.get("importance", "").lower()
+                label_raw = row.get("importance", "")
             else:
-                label = (
-                    row.get("label")
+                label_raw = (
+                    row.get("label") 
                     or row.get("sentiment") 
-                    or row.get("impact")
+                    or row.get("impact") 
                     or ""
-                ).lower()
+                )
             
-            if not text or label not in self.LABEL_MAP:
+            # 🔧 FIX : Nettoyage strict
+            if label_raw is None:
+                label_raw = ""
+            
+            label = str(label_raw).strip().lower()
+            
+            # 🔧 FIX : Debug si label non reconnu
+            if label and label not in self.LABEL_MAP:
+                logger.warning(f"⚠️ Label non reconnu: '{label}' (raw: '{label_raw}') pour target_column='{self.target_column}'")
+                logger.warning(f"Labels attendus: {list(self.LABEL_MAP.keys())}")
                 continue
+                
+            if not text or not label:
+                continue
+                
             out.append({"text": text, "label": self.LABEL_MAP[label]})
         return out
 
