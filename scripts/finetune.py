@@ -31,6 +31,13 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + C
 - Model card auto-générée avec métriques
 - Git push natif (fini les commits vides)
 
+🚀 PRODUCTION READY !
+- Token HF debugging + gestion d'erreurs
+- TrainingArguments redirection intelligente
+- Git status robuste + fallbacks
+- .gitignore auto-généré
+- Logs informatifs pour debugging
+
 •  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
   en **positive / neutral / negative** ou **critique / importante / générale**.
 •  Découpe automatiquement en train / validation (80 / 20 stratifié).
@@ -256,12 +263,25 @@ class Finetuner:
         self.task_type = "sentiment" if target_column == "label" else "importance"
         self.hub_id = self._get_hub_id()
         
-        # 🔧 MODIFICATION 2 : Clone du repo HuggingFace dès l'initialisation
+        # 🔧 MODIFICATION 2 : Clone du repo HuggingFace dès l'initialisation avec corrections
         self.repo = None
         self.repo_dir = None
         
         if self.hub_id and self.mode in ["production", "development"]:
             try:
+                # 🔧 CORRECTIF 5 : Vérification et debug du token HF
+                hf_token = os.environ.get("HF_TOKEN")
+                if not hf_token:
+                    logger.error("❌ HF_TOKEN non trouvé dans l'environnement")
+                    logger.error("💡 Ajoutez HF_TOKEN dans vos variables d'environnement ou GitHub Secrets")
+                    self.repo = None
+                    self.repo_dir = None
+                    return
+                else:
+                    # Debug token (masqué pour sécurité)
+                    token_preview = f"{hf_token[:7]}...{hf_token[-4:] if len(hf_token) > 11 else '***'}"
+                    logger.info(f"🔑 HF_TOKEN détecté: {token_preview}")
+                
                 # Clone (ou update) le repo dans un dossier local
                 self.repo_dir = Path(f"./hf-{self.task_type}-{self.mode}")
                 
@@ -270,15 +290,16 @@ class Finetuner:
                 try:
                     hf_api.repo_info(self.hub_id)
                     repo_exists = True
+                    logger.info(f"📦 Repo HuggingFace existant: {self.hub_id}")
                 except:
                     repo_exists = False
+                    logger.info(f"📦 Création du repo HuggingFace: {self.hub_id}")
                     
                 if not repo_exists:
                     # Créer le repo s'il n'existe pas
-                    logger.info(f"📦 Création du repo HuggingFace: {self.hub_id}")
                     create_repo(
                         self.hub_id,
-                        token=os.environ.get("HF_TOKEN"),
+                        token=hf_token,
                         private=False,
                         exist_ok=True
                     )
@@ -289,23 +310,30 @@ class Finetuner:
                     self.repo = Repository(
                         local_dir=self.repo_dir,
                         clone_from=self.hub_id,
-                        token=os.environ.get("HF_TOKEN"),
+                        token=hf_token,
                         skip_lfs_files=True  # Évite le DL des gros poids
                     )
-                    self.repo.git_pull()
-                    logger.info(f"🔄 Repo mis à jour: {self.repo_dir.resolve()}")
+                    try:
+                        self.repo.git_pull()
+                        logger.info(f"🔄 Repo mis à jour: {self.repo_dir.resolve()}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Pull impossible (pas grave): {e}")
                 else:
                     # Premier clone
                     self.repo = Repository(
                         local_dir=self.repo_dir,
                         clone_from=self.hub_id,
-                        token=os.environ.get("HF_TOKEN"),
+                        token=hf_token,
                         skip_lfs_files=True  # Évite le DL des gros poids
                     )
                     logger.info(f"📥 Repo cloné: {self.repo_dir.resolve()}")
+                
+                # 🔧 CORRECTIF 4 : Créer .gitignore pour ignorer les artefacts
+                self._setup_gitignore()
                     
             except Exception as e:
                 logger.warning(f"⚠️ Impossible de cloner le repo {self.hub_id}: {e}")
+                logger.info("🔧 Le modèle sera sauvé localement uniquement")
                 self.repo = None
                 self.repo_dir = None
         
@@ -358,6 +386,34 @@ class Finetuner:
                 label2id=self.LABEL_MAP,
             )
             logger.info("✅ Model & tokenizer loaded : %s", model_name)
+
+    def _setup_gitignore(self):
+        """🔧 CORRECTIF 4 : Créer .gitignore pour ignorer les artefacts"""
+        if not self.repo_dir:
+            return
+            
+        gitignore_path = self.repo_dir / ".gitignore"
+        gitignore_content = """# TradePulse ML - Artefacts à ignorer
+logs/
+*.pt
+*.pth
+*.bin
+checkpoints/
+runs/
+wandb/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
+tmp_eval/
+"""
+        
+        try:
+            if not gitignore_path.exists():
+                gitignore_path.write_text(gitignore_content.strip(), encoding="utf-8")
+                logger.info(f"📝 .gitignore créé: {gitignore_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de créer .gitignore: {e}")
 
     def _get_hub_id(self) -> str:
         """🎯 NOUVEAU : Retourne le hub_id approprié selon target_column et mode"""
@@ -479,9 +535,9 @@ class Finetuner:
         
         return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
 
-    # 🔧 MODIFICATION 4 : RÉÉCRITURE COMPLÈTE DE push_to_huggingface()
+    # 🔧 MODIFICATION 4 : RÉÉCRITURE COMPLÈTE DE push_to_huggingface() avec corrections
     def push_to_huggingface(self, commit_message: str = None):
-        """🎯 NOUVEAU : Push vers HuggingFace avec git natif"""
+        """🎯 NOUVEAU : Push vers HuggingFace avec git natif et corrections robustes"""
         
         if not self.repo:
             logger.warning("⚠️ Pas de repo à pusher (mode test ou erreur de clone)")
@@ -494,9 +550,31 @@ class Finetuner:
         commit_message = commit_message or f"🏋️ Update {self.task_type} – {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         try:
-            # Vérifier qu'il y a des changements
-            status = self.repo.git_status()
-            if "nothing to commit" in status:
+            # 🔧 CORRECTIF 3 : Vérification robuste des changements
+            has_changes = False
+            
+            try:
+                # Méthode 1 : git status
+                status = self.repo.git_status()
+                if "nothing to commit" not in status and "working tree clean" not in status:
+                    has_changes = True
+                    logger.info(f"📊 Git status: changements détectés")
+            except Exception as e:
+                logger.warning(f"⚠️ git_status() failed: {e}")
+                
+                # Méthode 2 : fallback avec git diff
+                try:
+                    diff_output = self.repo.git_diff("--stat")
+                    if diff_output and diff_output.strip():
+                        has_changes = True
+                        logger.info(f"📊 Git diff: changements détectés")
+                except Exception as e2:
+                    # Méthode 3 : forcer le push (assume changes)
+                    logger.warning(f"⚠️ git_diff() failed: {e2}")
+                    logger.info("🔧 Forcing push (assume changes)")
+                    has_changes = True
+            
+            if not has_changes:
                 logger.warning("⚠️ Aucun changement détecté dans le repo")
                 return
                 
@@ -513,9 +591,12 @@ class Finetuner:
             logger.info(f"✅ Pushed vers HuggingFace: https://huggingface.co/{self.hub_id}")
             
             # Vérification post-push
-            final_status = self.repo.git_status()
-            if "Your branch is up to date" in final_status:
-                logger.info("🎯 Push confirmé - Repo synchronisé")
+            try:
+                final_status = self.repo.git_status()
+                if "Your branch is up to date" in final_status or "working tree clean" in final_status:
+                    logger.info("🎯 Push confirmé - Repo synchronisé")
+            except Exception as e:
+                logger.info("🎯 Push probablement réussi (vérification status impossible)")
             
         except Exception as e:
             logger.error(f"❌ Erreur lors du push: {e}")
@@ -770,8 +851,12 @@ class Finetuner:
         # ⚖️ NOUVEAU : Utiliser F1 macro comme métrique principale si class balancing
         primary_metric = "f1_macro" if self.class_balancing else "f1"
 
+        # 🔧 CORRECTIF 2 : Rediriger output_dir vers repo_dir si disponible
+        output_dir = str(self.repo_dir) if self.repo_dir else args.output_dir
+        logger.info(f"📂 Répertoire d'entraînement: {output_dir}")
+
         targs = TrainingArguments(
-            output_dir=args.output_dir,
+            output_dir=output_dir,  # 🔧 CORRECTIF 2
             num_train_epochs=epochs,
             per_device_train_batch_size=batch_size,
             per_device_eval_batch_size=min(batch_size, args.eval_bs),
@@ -783,7 +868,7 @@ class Finetuner:
             load_best_model_at_end=len(ds["validation"]) > 0,
             metric_for_best_model=primary_metric if len(ds["validation"]) > 0 else None,
             greater_is_better=True,
-            logging_dir=os.path.join(args.output_dir, "logs"),
+            logging_dir=os.path.join(output_dir, "logs"),  # 🔧 CORRECTIF 2
             logging_steps=max(1, args.logging_steps // 10),  # Plus de logs pour petits datasets
             seed=args.seed,
             push_to_hub=False,  # Gestion manuelle du push
