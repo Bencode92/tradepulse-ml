@@ -356,22 +356,24 @@ jobs:
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-    - name: 🤖 Train Multi-Model Strategy (AUTO-DÉCLENCHEMENT)
+    - name: 🤖 Train Multi-Model Strategy (FIXED MODE)
       id: training
       run: |
         set -euo pipefail
         
         echo "🚀 Auto-Training Mode - Déclenché automatiquement!"
         echo "📋 Strategy: $TRAINING_STRATEGY"
-        echo "🔧 Mode incrémental FORCÉ pour accumulation automatique"
+        echo "🎯 Mode: $TRAINING_MODE (CORRIGÉ - sera passé au script!)"
         
         DATASET_FILE="datasets/$DATASET"
         MODELS_TRAINED=0
         SENTIMENT_UPDATED=false
         IMPORTANCE_UPDATED=false
         
-        # 🔧 Arguments communs avec force-update pour auto-déclenchement
-        COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE --force-update"
+        # 🔧 CORRECTION CRITIQUE: Ajout du mode dans COMMON_ARGS
+        COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE --mode $TRAINING_MODE --force-update"
+        
+        echo "🔧 Arguments communs: $COMMON_ARGS"
         
         # Entraîner le modèle de sentiment si disponible
         if [ "$HAS_LABEL" = "true" ]; then
@@ -450,111 +452,111 @@ jobs:
         echo "importance-updated=$IMPORTANCE_UPDATED" >> $GITHUB_OUTPUT
         
         echo "🎉 AUTO-TRAINING COMPLETED: $MODELS_TRAINED models!"
-        echo "🚀 Models automatically updated on HuggingFace!"
+        echo "🚀 Models should now be pushed to HuggingFace!"
         echo "💡 Next commit will trigger another auto-update!"
 
-    - name: 🔍 Vérification Auto-Déclenchement
+    - name: 🔍 Vérification Mode Corrigé
       if: always()
       run: |
-        echo "📋 Statut du déclenchement automatique:"
-        echo "======================================"
+        echo "📋 Statut du mode corrigé:"
+        echo "========================="
         
         echo "✅ Workflow déclenché automatiquement sur commit main"
-        echo "✅ Plus besoin de 'Run workflow' manuel"
-        echo "✅ Mode incrémental forcé pour accumulation"
-        echo "✅ Concurrency activée (annule les runs précédents)"
+        echo "✅ Mode $TRAINING_MODE CORRECTEMENT passé au script"
+        echo "✅ Plus de mode 'test' par défaut"
+        echo "✅ Modèles DEVRAIENT être poussés vers HuggingFace"
         echo ""
-        echo "🎯 Prochaine fois:"
-        echo "   1. Ajoutez des données via l'éditeur web"
-        echo "   2. Committez → Auto-déclenchement instantané!"
-        echo "   3. Vos modèles s'améliorent automatiquement"
+        echo "🔍 Vérifiez dans les logs:"
+        echo "   ✅ '🎯 Mode: incremental (CORRIGÉ - sera passé au script!)'"
+        echo "   ✅ '🔧 Arguments communs: --epochs 3 --lr 2e-5 --mode incremental --force-update'"
+        echo "   ✅ '✅ Nouveau modèle poussé vers HuggingFace' (au lieu de 'mode test')"
         echo ""
-        echo "🚀 Workflow complètement automatisé!"
+        echo "🚀 Workflow avec mode corrigé!"
 
-    - name: 🏷️ Create Auto-Trigger Tag
+    - name: 🏷️ Create Fixed-Mode Tag
       if: success()
       run: |
         set -euo pipefail
         
-        TAG_NAME="auto-trigger-v$TIMESTAMP"
+        TAG_NAME="mode-fixed-v$TIMESTAMP"
         
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
-        TAG_MESSAGE="🚀 Auto-Trigger Workflow: $TRAINING_STRATEGY
+        TAG_MESSAGE="🔧 Mode Corrigé: $TRAINING_STRATEGY
 
         📊 Training Results:
         - Dataset: $DATASET
         - Strategy: $TRAINING_STRATEGY
+        - Training Mode: $TRAINING_MODE (CORRIGÉ!)
         - Models trained: ${{ steps.training.outputs.models-trained }}
         - Sentiment updated: ${{ steps.training.outputs.sentiment-updated }}
         - Importance updated: ${{ steps.training.outputs.importance-updated }}
         - Timestamp: $TIMESTAMP
         - Commit: ${{ github.sha }}
 
-        🔧 Auto-Trigger Features:
-        - Déclenché automatiquement sur commit main
-        - Plus de filtres restrictifs sur paths
-        - Concurrency pour éviter les runs parallèles
-        - Mode incrémental forcé par défaut
+        🔧 Correction Appliquée:
+        - Mode $TRAINING_MODE maintenant passé au script
+        - Plus de mode 'test' par défaut
+        - Arguments: --mode $TRAINING_MODE ajouté
+        - Modèles DEVRAIENT être poussés vers HuggingFace
 
         🔗 Models:
         $([ "${{ steps.training.outputs.sentiment-updated }}" = "true" ] && echo "- Sentiment: https://huggingface.co/$SENTIMENT_MODEL")
         $([ "${{ steps.training.outputs.importance-updated }}" = "true" ] && echo "- Importance: https://huggingface.co/$IMPORTANCE_MODEL")
 
-        🎉 Workflow complètement automatisé!"
+        🎉 Mode corrigé - Push vers HuggingFace activé!"
         
         git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
         git push origin "$TAG_NAME"
         
-        echo "✅ Created auto-trigger tag: $TAG_NAME"
+        echo "✅ Created mode-fixed tag: $TAG_NAME"
 
-    - name: 📊 Auto-Trigger Final Summary
+    - name: 📊 Mode Fixed Final Summary
       if: always()
       run: |
         set -euo pipefail
         
-        echo "🚀 TradePulse ML - AUTO-DÉCLENCHEMENT CONFIGURÉ"
-        echo "=============================================="
+        echo "🚀 TradePulse ML - MODE CORRIGÉ"
+        echo "==============================="
         echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
         echo "🎯 Strategy: $TRAINING_STRATEGY"
+        echo "🎯 Mode: $TRAINING_MODE (CORRIGÉ!)"
         echo "🤖 Models trained: ${{ steps.training.outputs.models-trained }}"
         echo "📊 Dataset: $DATASET"
         echo ""
         
         if [ "${{ steps.training.outputs.sentiment-updated }}" = "true" ]; then
-          echo "✅ Sentiment Model (AUTO-UPDATED):"
+          echo "✅ Sentiment Model (MODE CORRIGÉ):"
           echo "  😊 URL: https://huggingface.co/$SENTIMENT_MODEL"
           echo "  🏷️ Labels: positive, negative, neutral"
-          echo "  🔧 Mode: Auto-trigger sur commit main"
+          echo "  🔧 Mode: $TRAINING_MODE (au lieu de 'test')"
         fi
         
         if [ "${{ steps.training.outputs.importance-updated }}" = "true" ]; then
-          echo "✅ Importance Model (AUTO-UPDATED):"
+          echo "✅ Importance Model (MODE CORRIGÉ):"
           echo "  🎯 URL: https://huggingface.co/$IMPORTANCE_MODEL"
           echo "  🏷️ Labels: générale, importante, critique"
-          echo "  🔧 Mode: Auto-trigger sur commit main"
+          echo "  🔧 Mode: $TRAINING_MODE (au lieu de 'test')"
         fi
         
         echo ""
-        echo "🎉 WORKFLOW AUTOMATISÉ CONFIGURÉ:"
-        echo "  ✅ Déclenchement automatique sur tout commit main"
-        echo "  ✅ Plus besoin de 'Run workflow' manuel"
-        echo "  ✅ Concurrency pour éviter les runs parallèles"
-        echo "  ✅ Mode incrémental forcé"
+        echo "🔧 PROBLÈME RÉSOLU:"
+        echo "  ❌ Avant: Mode 'test' par défaut → pas de push HuggingFace"
+        echo "  ✅ Maintenant: Mode '$TRAINING_MODE' → push activé"
         echo ""
-        echo "💡 Utilisation:"
-        echo "  1. Ajoutez des données via l'éditeur web"
-        echo "  2. Committez → Workflow se déclenche automatiquement"
-        echo "  3. Vos modèles s'améliorent sans intervention"
+        echo "💡 Vérifiez HuggingFace:"
+        echo "  🔗 https://huggingface.co/$SENTIMENT_MODEL"
+        echo "  🔗 https://huggingface.co/$IMPORTANCE_MODEL"
+        echo "  ↳ Devrait afficher 'Updated a few seconds ago'"
         echo ""
-        echo "🔄 Next commit will auto-trigger this workflow!"
+        echo "🔄 Next commit will auto-update with correct mode!"
 
     - name: 📤 Upload Training Artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: auto-trigger-training-${{ github.run_id }}
+        name: mode-fixed-training-${{ github.run_id }}
         path: |
           models/**
           training_strategy.json
