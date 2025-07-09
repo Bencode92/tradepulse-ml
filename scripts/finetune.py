@@ -25,6 +25,12 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + C
 - --class-balancing focal : Focal Loss pour classes déséquilibrées
 - Métriques F1 macro adaptées aux datasets déséquilibrés
 
+🔧 NOUVEAU : Push HuggingFace optimisé !
+- Clone automatique des repos HF
+- Sauvegarde directe dans repo cloné
+- Model card auto-générée avec métriques
+- Git push natif (fini les commits vides)
+
 •  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
   en **positive / neutral / negative** ou **critique / importante / générale**.
 •  Découpe automatiquement en train / validation (80 / 20 stratifié).
@@ -92,6 +98,9 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+
+# 🔧 MODIFICATION 1 : NOUVEAUX IMPORTS pour HuggingFace Git
+from huggingface_hub import Repository, HfApi, create_repo
 
 # 🎯 NOUVEAU : Configuration des modèles spécialisés
 MODELS_CONFIG = {
@@ -246,6 +255,59 @@ class Finetuner:
         # 🎯 NOUVEAU : Détermination automatique du hub_id
         self.task_type = "sentiment" if target_column == "label" else "importance"
         self.hub_id = self._get_hub_id()
+        
+        # 🔧 MODIFICATION 2 : Clone du repo HuggingFace dès l'initialisation
+        self.repo = None
+        self.repo_dir = None
+        
+        if self.hub_id and self.mode in ["production", "development"]:
+            try:
+                # Clone (ou update) le repo dans un dossier local
+                self.repo_dir = Path(f"./hf-{self.task_type}-{self.mode}")
+                
+                # Vérifier si le repo existe déjà sur HF
+                hf_api = HfApi()
+                try:
+                    hf_api.repo_info(self.hub_id)
+                    repo_exists = True
+                except:
+                    repo_exists = False
+                    
+                if not repo_exists:
+                    # Créer le repo s'il n'existe pas
+                    logger.info(f"📦 Création du repo HuggingFace: {self.hub_id}")
+                    create_repo(
+                        self.hub_id,
+                        token=os.environ.get("HF_TOKEN"),
+                        private=False,
+                        exist_ok=True
+                    )
+                
+                # Cloner ou pull le repo
+                if self.repo_dir.exists():
+                    # Repo déjà cloné, faire un pull
+                    self.repo = Repository(
+                        local_dir=self.repo_dir,
+                        clone_from=self.hub_id,
+                        token=os.environ.get("HF_TOKEN"),
+                        skip_lfs_files=True  # Évite le DL des gros poids
+                    )
+                    self.repo.git_pull()
+                    logger.info(f"🔄 Repo mis à jour: {self.repo_dir.resolve()}")
+                else:
+                    # Premier clone
+                    self.repo = Repository(
+                        local_dir=self.repo_dir,
+                        clone_from=self.hub_id,
+                        token=os.environ.get("HF_TOKEN"),
+                        skip_lfs_files=True  # Évite le DL des gros poids
+                    )
+                    logger.info(f"📥 Repo cloné: {self.repo_dir.resolve()}")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Impossible de cloner le repo {self.hub_id}: {e}")
+                self.repo = None
+                self.repo_dir = None
         
         # 🎯 NOUVEAU : Sélection des labels selon la colonne cible
         if target_column == "importance":
@@ -417,39 +479,48 @@ class Finetuner:
         
         return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
 
-    def push_to_huggingface(self, model_path: Path, commit_message: str = None):
-        """🎯 MODIFIÉ : Push vers HuggingFace avec hub_id automatique"""
+    # 🔧 MODIFICATION 4 : RÉÉCRITURE COMPLÈTE DE push_to_huggingface()
+    def push_to_huggingface(self, commit_message: str = None):
+        """🎯 NOUVEAU : Push vers HuggingFace avec git natif"""
         
-        if not self.hub_id:
-            logger.warning("⚠️ Pas de hub_id configuré, pas de push vers HuggingFace")
+        if not self.repo:
+            logger.warning("⚠️ Pas de repo à pusher (mode test ou erreur de clone)")
             return
-        
-        commit_message = commit_message or f"Entraînement {self.task_type} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            
+        if not self.repo_dir or not self.repo_dir.exists():
+            logger.error("❌ Dossier du repo non trouvé")
+            return
+
+        commit_message = commit_message or f"🏋️ Update {self.task_type} – {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         try:
-            # Chargement du modèle depuis le dossier local
-            model = AutoModelForSequenceClassification.from_pretrained(model_path)
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            # Vérifier qu'il y a des changements
+            status = self.repo.git_status()
+            if "nothing to commit" in status:
+                logger.warning("⚠️ Aucun changement détecté dans le repo")
+                return
+                
+            # Ajouter tous les fichiers modifiés
+            self.repo.git_add(all=True)
+            logger.info("📦 Fichiers ajoutés au staging")
             
-            # Push vers HuggingFace avec l'hub_id automatique
-            logger.info(f"📤 Push vers HuggingFace: {self.hub_id}")
+            # Commit avec message personnalisé
+            self.repo.git_commit(commit_message)
+            logger.info(f"💾 Commit créé: {commit_message}")
             
-            model.push_to_hub(
-                self.hub_id,
-                commit_message=commit_message,
-                private=False  # Ou True si vous voulez un repo privé
-            )
+            # Push vers HuggingFace
+            self.repo.git_push()
+            logger.info(f"✅ Pushed vers HuggingFace: https://huggingface.co/{self.hub_id}")
             
-            tokenizer.push_to_hub(
-                self.hub_id,
-                commit_message=commit_message,
-                private=False
-            )
-            
-            logger.info(f"✅ Modèle {self.task_type} pushé: https://huggingface.co/{self.hub_id}")
+            # Vérification post-push
+            final_status = self.repo.git_status()
+            if "Your branch is up to date" in final_status:
+                logger.info("🎯 Push confirmé - Repo synchronisé")
             
         except Exception as e:
             logger.error(f"❌ Erreur lors du push: {e}")
+            logger.info("🔧 Vous pouvez pusher manuellement:")
+            logger.info(f"cd {self.repo_dir} && git add . && git commit -m '{commit_message}' && git push")
             raise
 
     # -------------------------------------------------------------------
@@ -747,7 +818,12 @@ class Finetuner:
         mode_info = f"incremental-{self.task_type}" if self.incremental_mode else f"classic-{self.task_type}"
         logger.info(f"🔥 Start training for %d epochs (mode: %s)", epochs, mode_info)
         trainer.train()
-        trainer.save_model()
+        
+        # 🔧 MODIFICATION 3 : Sauvegarder directement dans le repo cloné
+        save_dir = self.repo_dir if self.repo_dir else Path(args.output_dir)
+        trainer.save_model(save_dir)
+        self.tokenizer.save_pretrained(save_dir)
+        logger.info(f"💾 Modèle sauvé dans: {save_dir}")
 
         if len(ds["validation"]) > 0:
             eval_res = trainer.evaluate()
@@ -760,6 +836,84 @@ class Finetuner:
         else:
             logger.info("✅ Training complete (no validation data)")
             eval_res = {"eval_f1": 0.0, "eval_accuracy": 0.0, f"eval_{primary_metric}": 0.0}
+
+        # 🔧 MODIFICATION 3 : Générer/mettre à jour la model card
+        if self.repo_dir:
+            card_path = self.repo_dir / "README.md"
+            f1m = eval_res.get(f"eval_{primary_metric}", 0)
+            acc = eval_res.get("eval_accuracy", 0)
+            
+            # Informations sur le dataset
+            dataset_name = args.dataset.name if hasattr(args.dataset, 'name') else str(args.dataset)
+            dataset_size = len(ds["train"]) + len(ds["validation"])
+            
+            # Création de la model card complète
+            card = f"""---
+language: en
+license: apache-2.0
+tags:
+- finance
+- sentiment-analysis
+- finbert
+- trading
+pipeline_tag: text-classification
+---
+
+# {self.hub_id}
+
+## Description
+Fine-tuned FinBERT model for financial {self.task_type} analysis in TradePulse.
+
+**Task**: {self.task_type.title()} Classification  
+**Target Column**: `{self.target_column}`  
+**Labels**: {list(self.LABEL_MAP.keys())}
+
+## Performance
+
+*Last training: {datetime.now().strftime('%Y-%m-%d %H:%M')}*  
+*Dataset: `{dataset_name}` ({dataset_size} samples)*
+
+| Metric | Value |
+|--------|-------|
+| Loss | {eval_res.get('eval_loss', 'n/a'):.4f} |
+| Accuracy | {acc:.4f} |
+| F1 Score | {eval_res.get('eval_f1', 0):.4f} |
+| F1 Macro | {f1m:.4f} |
+| Precision | {eval_res.get('eval_precision', 0):.4f} |
+| Recall | {eval_res.get('eval_recall', 0):.4f} |
+
+## Training Details
+
+- **Base Model**: {self.model_name}
+- **Training Mode**: {"Incremental" if self.incremental_mode else "Classic"}
+- **Epochs**: {epochs}
+- **Learning Rate**: {learning_rate}
+- **Batch Size**: {batch_size}
+- **Class Balancing**: {self.class_balancing or "None"}
+
+## Usage
+
+```python
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+tokenizer = AutoTokenizer.from_pretrained("{self.hub_id}")
+model = AutoModelForSequenceClassification.from_pretrained("{self.hub_id}")
+
+# Example prediction
+text = "Apple reported strong quarterly earnings beating expectations"
+inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
+outputs = model(**inputs)
+predictions = outputs.logits.softmax(dim=-1)
+```
+
+## Model Card Authors
+
+- TradePulse ML Team
+- Auto-generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+            
+            card_path.write_text(card.strip(), encoding="utf-8")
+            logger.info(f"📄 Model card mise à jour: {card_path}")
 
         # 🚀 NOUVEAU : Évaluation sur le dataset de test pour mode incrémental
         test_metrics = None
@@ -957,10 +1111,10 @@ def main():
             if should_update:
                 # Mise à jour du modèle sur HuggingFace
                 if args.mode in ["production", "development"]:
-                    commit_msg = f"Apprentissage incrémental {args.target_column} - Accuracy: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
+                    commit_msg = f"🔄 Incremental {args.target_column} | Acc: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
                     
                     logger.info(f"🚀 Mise à jour du modèle {args.target_column}")
-                    tuner.push_to_huggingface(args.output_dir, commit_msg)
+                    tuner.push_to_huggingface(commit_msg)
                     
                     logger.info("✅ Modèle mis à jour!")
                 else:
@@ -990,10 +1144,10 @@ def main():
             should_update = getattr(args, 'force_update', False)
             
             if should_update and args.mode in ["production", "development"]:
-                commit_msg = f"Apprentissage incrémental {args.target_column} - Dataset petit"
+                commit_msg = f"🔄 Incremental {args.target_column} - Dataset petit"
                 
                 logger.info(f"🚀 Mise à jour forcée du modèle {args.target_column}")
-                tuner.push_to_huggingface(args.output_dir, commit_msg)
+                tuner.push_to_huggingface(commit_msg)
                 
                 # Mise à jour du rapport
                 report_path = args.output_dir / "incremental_training_report.json"
@@ -1036,10 +1190,11 @@ def main():
         ds, _ = tuner.load_dataset(args.dataset)
         tuner.train(ds, args)
 
-        # Push classique si demandé (existant, conservé)
+        # Push classique si demandé (existant, conservé mais modifié)
         if args.push:
             logger.info("📤 Push du modèle vers HuggingFace Hub...")
-            tuner.push_to_huggingface(args.output_dir)
+            commit_msg = f"🏋️ Classic training {args.target_column} | Dataset: {args.dataset.name if hasattr(args.dataset, 'name') else str(args.dataset)}"
+            tuner.push_to_huggingface(commit_msg)
 
 
 if __name__ == "__main__":
