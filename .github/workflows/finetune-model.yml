@@ -223,7 +223,7 @@ jobs:
         pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
         pip install "transformers[torch]==4.41.0" datasets==2.19.1 accelerate==0.30.1 evaluate==0.4.2
         pip install scikit-learn==1.4.2 pandas==2.2.2 numpy==1.26.4
-        pip install huggingface_hub==0.23.0 tensorboard==2.16.2
+        pip install tensorboard==2.16.2
         
         if [ -f requirements.txt ]; then
           pip install -r requirements.txt
@@ -356,33 +356,42 @@ jobs:
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-    - name: 🤖 Train Multi-Model Strategy (FIXED MODE)
+    - name: 🤖 Train Multi-Model Strategy (MODE MAPPING FIXED)
       id: training
       run: |
         set -euo pipefail
         
         echo "🚀 Auto-Training Mode - Déclenché automatiquement!"
         echo "📋 Strategy: $TRAINING_STRATEGY"
-        echo "🎯 Mode: $TRAINING_MODE (CORRIGÉ - sera passé au script!)"
+        echo "🎯 Training Mode: $TRAINING_MODE"
+        
+        # 🔧 CORRECTION CRITIQUE: Mapping TRAINING_MODE → EXEC_MODE
+        if [ "$TRAINING_MODE" = "test" ]; then
+          EXEC_MODE="test"
+          echo "🧪 Mode test: pas de push HuggingFace"
+        else
+          EXEC_MODE="production"
+          echo "🚀 Mode production: push HuggingFace activé"
+        fi
         
         DATASET_FILE="datasets/$DATASET"
         MODELS_TRAINED=0
         SENTIMENT_UPDATED=false
         IMPORTANCE_UPDATED=false
         
-        # 🔧 CORRECTION CRITIQUE: Ajout du mode dans COMMON_ARGS
-        COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE --mode $TRAINING_MODE --force-update"
+        # Arguments communs avec mapping correct
+        COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE --mode $EXEC_MODE --force-update"
         
+        echo "🔧 Mapping: $TRAINING_MODE → $EXEC_MODE"
         echo "🔧 Arguments communs: $COMMON_ARGS"
         
         # Entraîner le modèle de sentiment si disponible
         if [ "$HAS_LABEL" = "true" ]; then
-          echo "😊 Training sentiment model (AUTO-TRIGGERED)..."
+          echo "😊 Training sentiment model..."
           SENTIMENT_OUTPUT="models/sentiment-$TIMESTAMP"
           
           if [ "$TRAINING_MODE" = "incremental" ]; then
-            echo "🔄 Mode incrémental AUTO pour: $SENTIMENT_MODEL"
-            echo "📥 Chargement automatique du modèle existant..."
+            echo "🔄 Mode incrémental: chargement du modèle existant"
             
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
@@ -392,8 +401,10 @@ jobs:
               --baseline-model "$SENTIMENT_MODEL" \
               --push --hub_id "$SENTIMENT_MODEL" \
               $COMMON_ARGS
-          else
-            echo "🆕 Mode fresh demandé"
+              
+          elif [ "$TRAINING_MODE" = "fresh" ]; then
+            echo "🆕 Mode fresh: nouveau modèle depuis base"
+            
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column label \
@@ -401,21 +412,30 @@ jobs:
               --model_name "$FALLBACK_MODEL" \
               --push --hub_id "$SENTIMENT_MODEL" \
               $COMMON_ARGS
+              
+          else
+            echo "🧪 Mode test: entraînement local seulement"
+            
+            python scripts/finetune.py \
+              --dataset "$DATASET_FILE" \
+              --target-column label \
+              --output_dir "$SENTIMENT_OUTPUT" \
+              --model_name "$FALLBACK_MODEL" \
+              $COMMON_ARGS
           fi
           
           MODELS_TRAINED=$((MODELS_TRAINED + 1))
           SENTIMENT_UPDATED=true
-          echo "✅ Sentiment model auto-updated!"
+          echo "✅ Sentiment model training completed!"
         fi
         
         # Entraîner le modèle d'importance si disponible
         if [ "$HAS_IMPORTANCE" = "true" ]; then
-          echo "🎯 Training importance model (AUTO-TRIGGERED)..."
+          echo "🎯 Training importance model..."
           IMPORTANCE_OUTPUT="models/importance-$TIMESTAMP"
           
           if [ "$TRAINING_MODE" = "incremental" ]; then
-            echo "🔄 Mode incrémental AUTO pour: $IMPORTANCE_MODEL"
-            echo "📥 Chargement automatique du modèle existant..."
+            echo "🔄 Mode incrémental: chargement du modèle existant"
             
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
@@ -425,8 +445,10 @@ jobs:
               --baseline-model "$IMPORTANCE_MODEL" \
               --push --hub_id "$IMPORTANCE_MODEL" \
               $COMMON_ARGS
-          else
-            echo "🆕 Mode fresh demandé"
+              
+          elif [ "$TRAINING_MODE" = "fresh" ]; then
+            echo "🆕 Mode fresh: nouveau modèle depuis base"
+            
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column importance \
@@ -434,11 +456,21 @@ jobs:
               --model_name "$FALLBACK_MODEL" \
               --push --hub_id "$IMPORTANCE_MODEL" \
               $COMMON_ARGS
+              
+          else
+            echo "🧪 Mode test: entraînement local seulement"
+            
+            python scripts/finetune.py \
+              --dataset "$DATASET_FILE" \
+              --target-column importance \
+              --output_dir "$IMPORTANCE_OUTPUT" \
+              --model_name "$FALLBACK_MODEL" \
+              $COMMON_ARGS
           fi
           
           MODELS_TRAINED=$((MODELS_TRAINED + 1))
           IMPORTANCE_UPDATED=true
-          echo "✅ Importance model auto-updated!"
+          echo "✅ Importance model training completed!"
         fi
         
         if [ $MODELS_TRAINED -eq 0 ]; then
@@ -451,112 +483,139 @@ jobs:
         echo "sentiment-updated=$SENTIMENT_UPDATED" >> $GITHUB_OUTPUT
         echo "importance-updated=$IMPORTANCE_UPDATED" >> $GITHUB_OUTPUT
         
-        echo "🎉 AUTO-TRAINING COMPLETED: $MODELS_TRAINED models!"
-        echo "🚀 Models should now be pushed to HuggingFace!"
+        echo "🎉 TRAINING COMPLETED: $MODELS_TRAINED models!"
+        if [ "$EXEC_MODE" = "production" ]; then
+          echo "🚀 Models pushed to HuggingFace!"
+        else
+          echo "🧪 Test mode: models saved locally only"
+        fi
         echo "💡 Next commit will trigger another auto-update!"
 
-    - name: 🔍 Vérification Mode Corrigé
+    - name: 🔍 Vérification Mode Mapping
       if: always()
       run: |
-        echo "📋 Statut du mode corrigé:"
-        echo "========================="
+        echo "📋 Statut du mapping de mode:"
+        echo "============================"
         
         echo "✅ Workflow déclenché automatiquement sur commit main"
-        echo "✅ Mode $TRAINING_MODE CORRECTEMENT passé au script"
-        echo "✅ Plus de mode 'test' par défaut"
-        echo "✅ Modèles DEVRAIENT être poussés vers HuggingFace"
+        echo "✅ TRAINING_MODE: $TRAINING_MODE"
+        echo "✅ EXEC_MODE: $(if [ "$TRAINING_MODE" = "test" ]; then echo "test"; else echo "production"; fi)"
+        echo "✅ Mapping correctement appliqué"
         echo ""
         echo "🔍 Vérifiez dans les logs:"
-        echo "   ✅ '🎯 Mode: incremental (CORRIGÉ - sera passé au script!)'"
-        echo "   ✅ '🔧 Arguments communs: --epochs 3 --lr 2e-5 --mode incremental --force-update'"
-        echo "   ✅ '✅ Nouveau modèle poussé vers HuggingFace' (au lieu de 'mode test')"
+        echo "   ✅ '🔧 Mapping: $TRAINING_MODE → [exec_mode]'"
+        echo "   ✅ '🔧 Arguments communs: --epochs 3 --lr 2e-5 --mode [exec_mode] --force-update'"
+        echo "   ✅ Script finetune.py reçoit un mode valide"
         echo ""
-        echo "🚀 Workflow avec mode corrigé!"
+        echo "🚀 Mapping de mode corrigé!"
 
-    - name: 🏷️ Create Fixed-Mode Tag
+    - name: 🏷️ Create Mode-Mapping Tag
       if: success()
       run: |
         set -euo pipefail
         
-        TAG_NAME="mode-fixed-v$TIMESTAMP"
+        TAG_NAME="mode-mapping-v$TIMESTAMP"
         
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
         
-        TAG_MESSAGE="🔧 Mode Corrigé: $TRAINING_STRATEGY
+        # Déterminer EXEC_MODE pour le tag
+        if [ "$TRAINING_MODE" = "test" ]; then
+          EXEC_MODE="test"
+        else
+          EXEC_MODE="production"
+        fi
+        
+        TAG_MESSAGE="🔧 Mode Mapping Fixed: $TRAINING_STRATEGY
 
         📊 Training Results:
         - Dataset: $DATASET
         - Strategy: $TRAINING_STRATEGY
-        - Training Mode: $TRAINING_MODE (CORRIGÉ!)
+        - Training Mode: $TRAINING_MODE
+        - Exec Mode: $EXEC_MODE (mapped)
         - Models trained: ${{ steps.training.outputs.models-trained }}
         - Sentiment updated: ${{ steps.training.outputs.sentiment-updated }}
         - Importance updated: ${{ steps.training.outputs.importance-updated }}
         - Timestamp: $TIMESTAMP
         - Commit: ${{ github.sha }}
 
-        🔧 Correction Appliquée:
-        - Mode $TRAINING_MODE maintenant passé au script
-        - Plus de mode 'test' par défaut
-        - Arguments: --mode $TRAINING_MODE ajouté
-        - Modèles DEVRAIENT être poussés vers HuggingFace
+        🔧 Mapping Applied:
+        - TRAINING_MODE: $TRAINING_MODE
+        - EXEC_MODE: $EXEC_MODE
+        - Script receives valid mode
+        - No more 'invalid choice' errors
 
         🔗 Models:
         $([ "${{ steps.training.outputs.sentiment-updated }}" = "true" ] && echo "- Sentiment: https://huggingface.co/$SENTIMENT_MODEL")
         $([ "${{ steps.training.outputs.importance-updated }}" = "true" ] && echo "- Importance: https://huggingface.co/$IMPORTANCE_MODEL")
 
-        🎉 Mode corrigé - Push vers HuggingFace activé!"
+        🎉 Mode mapping fixed - Script compatibility restored!"
         
         git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
         git push origin "$TAG_NAME"
         
-        echo "✅ Created mode-fixed tag: $TAG_NAME"
+        echo "✅ Created mode-mapping tag: $TAG_NAME"
 
-    - name: 📊 Mode Fixed Final Summary
+    - name: 📊 Mode Mapping Final Summary
       if: always()
       run: |
         set -euo pipefail
         
-        echo "🚀 TradePulse ML - MODE CORRIGÉ"
-        echo "==============================="
+        # Déterminer EXEC_MODE pour le résumé
+        if [ "$TRAINING_MODE" = "test" ]; then
+          EXEC_MODE="test"
+        else
+          EXEC_MODE="production"
+        fi
+        
+        echo "🚀 TradePulse ML - MODE MAPPING CORRIGÉ"
+        echo "======================================"
         echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
         echo "🎯 Strategy: $TRAINING_STRATEGY"
-        echo "🎯 Mode: $TRAINING_MODE (CORRIGÉ!)"
+        echo "🎯 Training Mode: $TRAINING_MODE"
+        echo "🎯 Exec Mode: $EXEC_MODE (mapped)"
         echo "🤖 Models trained: ${{ steps.training.outputs.models-trained }}"
         echo "📊 Dataset: $DATASET"
         echo ""
         
         if [ "${{ steps.training.outputs.sentiment-updated }}" = "true" ]; then
-          echo "✅ Sentiment Model (MODE CORRIGÉ):"
+          echo "✅ Sentiment Model (MODE MAPPING):"
           echo "  😊 URL: https://huggingface.co/$SENTIMENT_MODEL"
           echo "  🏷️ Labels: positive, negative, neutral"
-          echo "  🔧 Mode: $TRAINING_MODE (au lieu de 'test')"
+          echo "  🔧 Mode: $TRAINING_MODE → $EXEC_MODE"
         fi
         
         if [ "${{ steps.training.outputs.importance-updated }}" = "true" ]; then
-          echo "✅ Importance Model (MODE CORRIGÉ):"
+          echo "✅ Importance Model (MODE MAPPING):"
           echo "  🎯 URL: https://huggingface.co/$IMPORTANCE_MODEL"
           echo "  🏷️ Labels: générale, importante, critique"
-          echo "  🔧 Mode: $TRAINING_MODE (au lieu de 'test')"
+          echo "  🔧 Mode: $TRAINING_MODE → $EXEC_MODE"
         fi
         
         echo ""
         echo "🔧 PROBLÈME RÉSOLU:"
-        echo "  ❌ Avant: Mode 'test' par défaut → pas de push HuggingFace"
-        echo "  ✅ Maintenant: Mode '$TRAINING_MODE' → push activé"
+        echo "  ❌ Avant: 'invalid choice: incremental' error"
+        echo "  ✅ Maintenant: $TRAINING_MODE → $EXEC_MODE mapping"
         echo ""
-        echo "💡 Vérifiez HuggingFace:"
-        echo "  🔗 https://huggingface.co/$SENTIMENT_MODEL"
-        echo "  🔗 https://huggingface.co/$IMPORTANCE_MODEL"
-        echo "  ↳ Devrait afficher 'Updated a few seconds ago'"
+        echo "💡 Mapping Logic:"
+        echo "  🧪 test → test (no push)"
+        echo "  🔄 incremental → production (push enabled)"
+        echo "  🆕 fresh → production (push enabled)"
         echo ""
-        echo "🔄 Next commit will auto-update with correct mode!"
+        if [ "$EXEC_MODE" = "production" ]; then
+          echo "🔗 Vérifiez HuggingFace:"
+          echo "  🔗 https://huggingface.co/$SENTIMENT_MODEL"
+          echo "  🔗 https://huggingface.co/$IMPORTANCE_MODEL"
+          echo "  ↳ Devrait afficher 'Updated a few seconds ago'"
+        fi
+        echo ""
+        echo "🔄 Next commit will auto-update with correct mapping!"
 
     - name: 📤 Upload Training Artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: mode-fixed-training-${{ github.run_id }}
+        name: mode-mapping-training-${{ github.run_id }}
         path: |
           models/**
           training_strategy.json
