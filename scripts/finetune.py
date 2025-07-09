@@ -25,11 +25,12 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + C
 - --class-balancing focal : Focal Loss pour classes déséquilibrées
 - Métriques F1 macro adaptées aux datasets déséquilibrés
 
-🔧 NOUVEAU : Push HuggingFace optimisé !
+🔧 NOUVEAU : Push HuggingFace optimisé avec API corrigée !
 - Clone automatique des repos HF
 - Sauvegarde directe dans repo cloné
 - Model card auto-générée avec métriques
 - Git push natif (fini les commits vides)
+- API HuggingFace Hub ≥0.22.0 compatible
 
 🚀 PRODUCTION READY !
 - Token HF debugging + gestion d'erreurs
@@ -535,9 +536,9 @@ tmp_eval/
         
         return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
 
-    # 🔧 MODIFICATION 4 : RÉÉCRITURE COMPLÈTE DE push_to_huggingface() avec corrections
+    # 🔧 CORRECTION API HuggingFace Hub : push_to_huggingface() avec nouvelle API ≥0.22.0
     def push_to_huggingface(self, commit_message: str = None):
-        """🎯 NOUVEAU : Push vers HuggingFace avec git natif et corrections robustes"""
+        """🎯 NOUVEAU : Push vers HuggingFace avec API ≥0.22.0 compatible"""
         
         if not self.repo:
             logger.warning("⚠️ Pas de repo à pusher (mode test ou erreur de clone)")
@@ -550,27 +551,33 @@ tmp_eval/
         commit_message = commit_message or f"🏋️ Update {self.task_type} – {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         try:
-            # 🔧 CORRECTIF 3 : Vérification robuste des changements
+            # 🔧 CORRECTION API : Vérification des changements avec nouvelle API
             has_changes = False
             
             try:
-                # Méthode 1 : git status
-                status = self.repo.git_status()
-                if "nothing to commit" not in status and "working tree clean" not in status:
+                # Méthode 1 : Utiliser self.repo.git("status") au lieu de git_status()
+                status_output = self.repo.git("status", "--porcelain")
+                if status_output and status_output.strip():
                     has_changes = True
-                    logger.info(f"📊 Git status: changements détectés")
+                    logger.info("📊 Changements détectés via git status --porcelain")
+                else:
+                    # Vérifier aussi with git status classique
+                    status_clean = self.repo.git("status")
+                    if "nothing to commit" not in status_clean and "working tree clean" not in status_clean:
+                        has_changes = True
+                        logger.info("📊 Changements détectés via git status")
             except Exception as e:
-                logger.warning(f"⚠️ git_status() failed: {e}")
+                logger.warning(f"⚠️ git status failed: {e}")
                 
-                # Méthode 2 : fallback avec git diff
+                # Méthode 2 : Fallback avec git diff
                 try:
-                    diff_output = self.repo.git_diff("--stat")
+                    diff_output = self.repo.git("diff", "--stat")
                     if diff_output and diff_output.strip():
                         has_changes = True
-                        logger.info(f"📊 Git diff: changements détectés")
+                        logger.info("📊 Changements détectés via git diff --stat")
                 except Exception as e2:
-                    # Méthode 3 : forcer le push (assume changes)
-                    logger.warning(f"⚠️ git_diff() failed: {e2}")
+                    # Méthode 3 : Forcer le push (assume changes)
+                    logger.warning(f"⚠️ git diff failed: {e2}")
                     logger.info("🔧 Forcing push (assume changes)")
                     has_changes = True
             
@@ -578,8 +585,9 @@ tmp_eval/
                 logger.warning("⚠️ Aucun changement détecté dans le repo")
                 return
                 
-            # Ajouter tous les fichiers modifiés
-            self.repo.git_add(all=True)
+            # 🔧 CORRECTION API : git_add() sans argument 'all' 
+            # La nouvelle API accepte seulement pattern="." ou aucun argument
+            self.repo.git_add()  # Par défaut ajoute tout (équivalent à git add .)
             logger.info("📦 Fichiers ajoutés au staging")
             
             # Commit avec message personnalisé
@@ -590,11 +598,13 @@ tmp_eval/
             self.repo.git_push()
             logger.info(f"✅ Pushed vers HuggingFace: https://huggingface.co/{self.hub_id}")
             
-            # Vérification post-push
+            # Vérification post-push avec nouvelle API
             try:
-                final_status = self.repo.git_status()
+                final_status = self.repo.git("status")
                 if "Your branch is up to date" in final_status or "working tree clean" in final_status:
                     logger.info("🎯 Push confirmé - Repo synchronisé")
+                else:
+                    logger.info("🎯 Push probablement réussi")
             except Exception as e:
                 logger.info("🎯 Push probablement réussi (vérification status impossible)")
             
