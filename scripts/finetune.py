@@ -5,6 +5,11 @@
 TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + Class Balancing
 ========================================================================================
 
+🎯 NOUVEAU : Modèles Séparés !
+- Sentiment → Bencode92/tradepulse-finbert-sentiment
+- Importance → Bencode92/tradepulse-finbert-importance
+- Hub ID automatique selon --target-column
+
 🚀 NOUVEAU : Apprentissage Incrémental !
 - Mode --incremental : Améliore un modèle existant au lieu de créer un nouveau
 - Validation automatique avant mise à jour  
@@ -27,28 +32,29 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + C
   présent sur HuggingFace Hub.
 •  Produit un *training_report.json* + logs TensorBoard dans <output_dir>.
 
-Usage Sentiment avec Class Balancing:
-------------------------------------
+Usage Sentiment avec Hub ID automatique:
+---------------------------------------
 $ python finetune.py \
     --dataset datasets/news_20250708.csv \
     --output_dir models/finbert-sentiment \
     --target-column label \
-    --class-balancing weighted
+    --push
 
-🎯 NOUVEAU - Usage Importance:
------------------------------
+Usage Importance avec Hub ID automatique:
+----------------------------------------
 $ python finetune.py \
-    --dataset datasets/news_20250705.csv \
+    --dataset datasets/news_20250708.csv \
     --output_dir models/finbert-importance \
-    --target-column importance
+    --target-column importance \
+    --push
 
 🚀 NOUVEAU - Usage Apprentissage Incrémental:
 --------------------------------------------
 # Mode production (améliore le modèle stable)
-$ python finetune.py --incremental --mode production --dataset datasets/news_20250707.csv
+$ python finetune.py --incremental --mode production --target-column label --dataset datasets/news_20250707.csv
 
 # Mode développement (améliore le modèle de dev)
-$ python finetune.py --incremental --mode development --dataset datasets/news_20250707.csv
+$ python finetune.py --incremental --mode development --target-column importance --dataset datasets/news_20250707.csv
 
 # Mode test (validation locale, pas de mise à jour)
 $ python finetune.py --incremental --mode test --dataset datasets/news_20250707.csv
@@ -87,17 +93,33 @@ from transformers import (
     set_seed,
 )
 
-# 🚀 NOUVEAU : Configuration des modèles de production
+# 🎯 NOUVEAU : Configuration des modèles spécialisés
 MODELS_CONFIG = {
-    "production": {
-        "hf_id": "Bencode92/tradepulse-finbert-prod",          # Modèle PRODUCTION stable
-        "description": "Modèle stable pour site TradePulse",
-        "auto_update": True,  # Met à jour automatiquement si amélioration
+    "sentiment": {
+        "production": {
+            "hf_id": "Bencode92/tradepulse-finbert-sentiment",
+            "description": "Modèle sentiment pour TradePulse",
+            "auto_update": True,
+        },
+        "development": {
+            "hf_id": "Bencode92/tradepulse-finbert-sentiment-dev",
+            "description": "Modèle sentiment dev pour tests",
+            "auto_update": False,
+        },
+        "fallback": "yiyanghkust/finbert-tone"
     },
-    "development": {
-        "hf_id": "Bencode92/tradepulse-finbert-dev",          # Modèle DEV pour tests
-        "description": "Modèle de développement et tests",
-        "auto_update": False,  # Mise à jour manuelle seulement
+    "importance": {
+        "production": {
+            "hf_id": "Bencode92/tradepulse-finbert-importance",
+            "description": "Modèle importance pour TradePulse",
+            "auto_update": True,
+        },
+        "development": {
+            "hf_id": "Bencode92/tradepulse-finbert-importance-dev",
+            "description": "Modèle importance dev pour tests",
+            "auto_update": False,
+        },
+        "fallback": "yiyanghkust/finbert-tone"
     }
 }
 
@@ -211,24 +233,29 @@ class Finetuner:
 
     def __init__(self, model_name: str, max_length: int, incremental_mode: bool = False, 
                  baseline_model: str = None, target_column: str = "label", 
-                 class_balancing: str = None):
+                 class_balancing: str = None, mode: str = "production"):
         self.model_name = model_name
         self.max_length = max_length
         self.incremental_mode = incremental_mode
         self.baseline_model = baseline_model
         self.target_column = target_column  # 🎯 NOUVEAU
         self.class_balancing = class_balancing  # ⚖️ NOUVEAU
+        self.mode = mode  # 🎯 NOUVEAU : Stocker le mode
         self.class_weights = None  # ⚖️ NOUVEAU
+        
+        # 🎯 NOUVEAU : Détermination automatique du hub_id
+        self.task_type = "sentiment" if target_column == "label" else "importance"
+        self.hub_id = self._get_hub_id()
         
         # 🎯 NOUVEAU : Sélection des labels selon la colonne cible
         if target_column == "importance":
             self.LABEL_MAP = self.IMPORTANCE_LABEL_MAP
             self.ID2LABEL = self.IMPORTANCE_ID2LABEL
-            logger.info("🎯 Mode entraînement : IMPORTANCE (critique/importante/générale)")
+            logger.info(f"🎯 Mode entraînement : IMPORTANCE → {self.hub_id}")
         else:
             self.LABEL_MAP = self.SENTIMENT_LABEL_MAP
             self.ID2LABEL = self.SENTIMENT_ID2LABEL
-            logger.info("😊 Mode entraînement : SENTIMENT (positive/negative/neutral)")
+            logger.info(f"😊 Mode entraînement : SENTIMENT → {self.hub_id}")
         
         # ⚖️ NOUVEAU : Info sur class balancing
         if class_balancing:
@@ -269,6 +296,21 @@ class Finetuner:
                 label2id=self.LABEL_MAP,
             )
             logger.info("✅ Model & tokenizer loaded : %s", model_name)
+
+    def _get_hub_id(self) -> str:
+        """🎯 NOUVEAU : Retourne le hub_id approprié selon target_column et mode"""
+        try:
+            # Déterminer le type de tâche
+            task_type = "sentiment" if self.target_column == "label" else "importance"
+            
+            if self.mode in ["production", "development"]:
+                return MODELS_CONFIG[task_type][self.mode]["hf_id"]
+            else:
+                # Mode test : pas de hub_id spécifique
+                return None
+        except KeyError:
+            logger.warning(f"⚠️ Configuration non trouvée pour {task_type}/{self.mode}")
+            return None
 
     # -------------------------------------------------------------------
     # ⚖️ NOUVEAU : Méthodes de class balancing
@@ -375,32 +417,36 @@ class Finetuner:
         
         return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
 
-    def push_to_huggingface(self, model_path: Path, hf_model_id: str, commit_message: str = None):
-        """Push le modèle vers HuggingFace Hub"""
+    def push_to_huggingface(self, model_path: Path, commit_message: str = None):
+        """🎯 MODIFIÉ : Push vers HuggingFace avec hub_id automatique"""
         
-        commit_message = commit_message or f"Apprentissage incrémental - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        if not self.hub_id:
+            logger.warning("⚠️ Pas de hub_id configuré, pas de push vers HuggingFace")
+            return
+        
+        commit_message = commit_message or f"Entraînement {self.task_type} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
         
         try:
             # Chargement du modèle depuis le dossier local
             model = AutoModelForSequenceClassification.from_pretrained(model_path)
             tokenizer = AutoTokenizer.from_pretrained(model_path)
             
-            # Push vers HuggingFace
-            logger.info(f"📤 Push vers HuggingFace: {hf_model_id}")
+            # Push vers HuggingFace avec l'hub_id automatique
+            logger.info(f"📤 Push vers HuggingFace: {self.hub_id}")
             
             model.push_to_hub(
-                hf_model_id,
+                self.hub_id,
                 commit_message=commit_message,
                 private=False  # Ou True si vous voulez un repo privé
             )
             
             tokenizer.push_to_hub(
-                hf_model_id,
+                self.hub_id,
                 commit_message=commit_message,
                 private=False
             )
             
-            logger.info(f"✅ Modèle pushé vers HuggingFace: https://huggingface.co/{hf_model_id}")
+            logger.info(f"✅ Modèle {self.task_type} pushé: https://huggingface.co/{self.hub_id}")
             
         except Exception as e:
             logger.error(f"❌ Erreur lors du push: {e}")
@@ -624,9 +670,9 @@ class Finetuner:
         
         # 🚀 NOUVEAU : Nommage différent selon le mode
         if self.incremental_mode:
-            run_name = f"incremental-{getattr(args, 'mode', 'test')}-{ts}"
+            run_name = f"incremental-{self.task_type}-{getattr(args, 'mode', 'test')}-{ts}"
         else:
-            run_name = f"finbert-{self.target_column}-{ts}"  # 🎯 Inclure target_column
+            run_name = f"finbert-{self.task_type}-{ts}"  # 🎯 Inclure task_type
 
         # ⚖️ NOUVEAU : Créer la fonction de loss pour class balancing
         custom_loss_fn = None
@@ -669,8 +715,7 @@ class Finetuner:
             logging_dir=os.path.join(args.output_dir, "logs"),
             logging_steps=max(1, args.logging_steps // 10),  # Plus de logs pour petits datasets
             seed=args.seed,
-            push_to_hub=False if self.incremental_mode else args.push,  # Gestion manuelle en mode incrémental
-            hub_model_id=args.hub_id if (args.push and not self.incremental_mode) else None,
+            push_to_hub=False,  # Gestion manuelle du push
             report_to="tensorboard",
             save_total_limit=1,  # Économiser l'espace disque
             dataloader_drop_last=False,  # Ne pas ignorer les derniers échantillons
@@ -699,7 +744,7 @@ class Finetuner:
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
             )
 
-        mode_info = f"incremental-{self.target_column}" if self.incremental_mode else f"classic-{self.target_column}"
+        mode_info = f"incremental-{self.task_type}" if self.incremental_mode else f"classic-{self.task_type}"
         logger.info(f"🔥 Start training for %d epochs (mode: %s)", epochs, mode_info)
         trainer.train()
         trainer.save_model()
@@ -726,6 +771,8 @@ class Finetuner:
         # save a report (adapté pour mode incrémental + importance + class balancing)
         report = {
             "model": self.model_name,
+            "task_type": self.task_type,  # 🎯 NOUVEAU
+            "hub_id": self.hub_id,        # 🎯 NOUVEAU
             "mode": "incremental" if self.incremental_mode else "classic",
             "target_column": self.target_column,  # 🎯 NOUVEAU
             "label_mapping": dict(self.LABEL_MAP),  # 🎯 NOUVEAU
@@ -790,7 +837,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--push", action="store_true", help="Push model to HF Hub")
     p.add_argument(
-        "--hub_id", type=str, default=None, help="HF repo id (org/model)"
+        "--hub_id", type=str, default=None, help="HF repo id (auto-détecté selon --target-column)"
     )
     
     # 🎯 NOUVEAU argument pour la colonne cible
@@ -804,7 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
     # 🚀 NOUVEAUX arguments pour l'apprentissage incrémental
     p.add_argument("--incremental", action="store_true", 
                    help="Activer l'apprentissage incrémental")
-    p.add_argument("--mode", choices=["test", "development", "production"], default="test",
+    p.add_argument("--mode", choices=["test", "development", "production"], default="production",
                    help="Mode incrémental (test/development/production)")
     p.add_argument("--baseline-model", type=str, default=None,
                    help="Modèle de référence pour l'incrémental (auto selon mode si non spécifié)")
@@ -845,13 +892,18 @@ def main():
         )
         return
 
+    # 🎯 NOUVEAU : Gestion du baseline model automatique
+    if args.incremental and getattr(args, 'baseline_model', None) is None:
+        task_type = "sentiment" if args.target_column == "label" else "importance"
+        try:
+            args.baseline_model = MODELS_CONFIG[task_type][args.mode]["hf_id"]
+        except KeyError:
+            args.baseline_model = MODELS_CONFIG[task_type]["fallback"]
+            logger.warning(f"⚠️ Modèle {task_type}/{args.mode} non trouvé, utilisation du fallback")
+
     # 🚀 NOUVEAU : Gestion du mode incrémental
     if args.incremental:
         logger.info("🔄 Mode apprentissage incrémental activé")
-        
-        # Déterminer le modèle de base selon le mode
-        if getattr(args, 'baseline_model', None) is None:
-            args.baseline_model = MODELS_CONFIG.get(args.mode, {}).get("hf_id", "yiyanghkust/finbert-tone")
         
         logger.info(f"🎯 Mode: {args.mode}")
         logger.info(f"📦 Modèle de base: {args.baseline_model}")
@@ -863,7 +915,8 @@ def main():
             incremental_mode=True,
             baseline_model=args.baseline_model,
             target_column=args.target_column,  # 🎯 NOUVEAU
-            class_balancing=args.class_balancing  # ⚖️ NOUVEAU
+            class_balancing=args.class_balancing,  # ⚖️ NOUVEAU
+            mode=args.mode
         )
         
         # Chargement du dataset avec division train/val/test
@@ -904,13 +957,12 @@ def main():
             if should_update:
                 # Mise à jour du modèle sur HuggingFace
                 if args.mode in ["production", "development"]:
-                    hf_model_id = MODELS_CONFIG[args.mode]["hf_id"]
-                    commit_msg = f"Apprentissage incrémental - Accuracy: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
+                    commit_msg = f"Apprentissage incrémental {args.target_column} - Accuracy: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
                     
-                    logger.info(f"🚀 Mise à jour du modèle {args.mode}: {hf_model_id}")
-                    tuner.push_to_huggingface(args.output_dir, hf_model_id, commit_msg)
+                    logger.info(f"🚀 Mise à jour du modèle {args.target_column}")
+                    tuner.push_to_huggingface(args.output_dir, commit_msg)
                     
-                    logger.info("✅ Modèle de production mis à jour!")
+                    logger.info("✅ Modèle mis à jour!")
                 else:
                     logger.info("✅ Nouveau modèle validé (mode test - pas de mise à jour auto)")
             else:
@@ -927,7 +979,7 @@ def main():
                     "new_metrics": test_metrics,
                     "model_updated": should_update,
                     "update_reason": reason,
-                    "hf_model_id": MODELS_CONFIG.get(args.mode, {}).get("hf_id") if should_update else None,
+                    "hf_model_id": tuner.hub_id if should_update else None,
                 })
                 
                 with open(report_path, "w") as f:
@@ -938,11 +990,10 @@ def main():
             should_update = getattr(args, 'force_update', False)
             
             if should_update and args.mode in ["production", "development"]:
-                hf_model_id = MODELS_CONFIG[args.mode]["hf_id"]
-                commit_msg = f"Apprentissage incrémental - Dataset petit"
+                commit_msg = f"Apprentissage incrémental {args.target_column} - Dataset petit"
                 
-                logger.info(f"🚀 Mise à jour forcée du modèle {args.mode}: {hf_model_id}")
-                tuner.push_to_huggingface(args.output_dir, hf_model_id, commit_msg)
+                logger.info(f"🚀 Mise à jour forcée du modèle {args.target_column}")
+                tuner.push_to_huggingface(args.output_dir, commit_msg)
                 
                 # Mise à jour du rapport
                 report_path = args.output_dir / "incremental_training_report.json"
@@ -955,7 +1006,7 @@ def main():
                         "new_metrics": test_metrics or {"accuracy": 0.0, "f1": 0.0, "f1_macro": 0.0},
                         "model_updated": should_update,
                         "update_reason": "Force update - petit dataset",
-                        "hf_model_id": hf_model_id,
+                        "hf_model_id": tuner.hub_id,
                     })
                     
                     with open(report_path, "w") as f:
@@ -974,25 +1025,13 @@ def main():
                 args.output_dir = Path(new_output)
                 logger.info("📂 Nom de modèle auto-généré : %s", args.output_dir)
 
-        # Support du modèle baseline pour l'incrémental (AJOUTÉ)
-        baseline_model = getattr(args, 'baseline_model', None) if hasattr(args, 'baseline_model') else None
-        
-        if baseline_model and args.incremental:
-            tuner = Finetuner(
-                model_name=args.model_name, 
-                max_length=args.max_length,
-                incremental_mode=True,
-                baseline_model=baseline_model,
-                target_column=args.target_column,  # 🎯 NOUVEAU
-                class_balancing=args.class_balancing  # ⚖️ NOUVEAU
-            )
-        else:
-            tuner = Finetuner(
-                model_name=args.model_name, 
-                max_length=args.max_length,
-                target_column=args.target_column,  # 🎯 NOUVEAU
-                class_balancing=args.class_balancing  # ⚖️ NOUVEAU
-            )
+        tuner = Finetuner(
+            model_name=args.model_name, 
+            max_length=args.max_length,
+            target_column=args.target_column,  # 🎯 NOUVEAU
+            class_balancing=args.class_balancing,  # ⚖️ NOUVEAU
+            mode=args.mode
+        )
 
         ds, _ = tuner.load_dataset(args.dataset)
         tuner.train(ds, args)
@@ -1000,6 +1039,7 @@ def main():
         # Push classique si demandé (existant, conservé)
         if args.push:
             logger.info("📤 Push du modèle vers HuggingFace Hub...")
+            tuner.push_to_huggingface(args.output_dir)
 
 
 if __name__ == "__main__":
