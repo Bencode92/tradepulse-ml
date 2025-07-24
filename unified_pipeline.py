@@ -31,6 +31,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+import pandas as pd  # Ajout pour vérifier les colonnes
 
 # Configuration des couleurs pour l'affichage
 class Colors:
@@ -210,58 +211,83 @@ def run_collect_and_label(count: int = 30, days: int = 2, mode: str = "test",
 
 def run_incremental_training(dataset_path: Path, mode: str = "test", 
                            force_update: bool = False) -> bool:
-    """Apprentissage incrémental"""
-    log_header("Apprentissage Incrémental")
+    """Apprentissage incrémental - supporte maintenant sentiment, importance ET corrélations"""
+    log_header("Apprentissage Incrémental Triple")
     
-    # Générer le répertoire de sortie
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"models/incremental_{mode}_{timestamp}"
-    
-    # Construire la commande
-    cmd = [
-        "python", "scripts/finetune.py",
-        "--incremental",
-        "--mode", mode,
-        "--dataset", str(dataset_path),
-        "--output_dir", output_dir,
-    ]
-    
-    if force_update:
-        cmd.append("--force-update")
-    
-    # Exécuter l'entraînement
-    if run_command(cmd, f"Apprentissage incrémental (mode: {mode})"):
-        # Vérifier les résultats
-        report_path = Path(output_dir) / "incremental_training_report.json"
-        if report_path.exists():
-            try:
-                with open(report_path) as f:
-                    report = json.load(f)
-                
-                baseline_acc = report.get("baseline_metrics", {}).get("accuracy", 0)
-                new_acc = report.get("new_metrics", {}).get("accuracy", 0)
-                model_updated = report.get("model_updated", False)
-                
-                log_info(f"Baseline accuracy: {baseline_acc:.3f}")
-                log_info(f"Nouvelle accuracy: {new_acc:.3f}")
-                
-                if model_updated:
-                    log_success("🚀 Modèle mis à jour sur HuggingFace!")
-                    if report.get("hf_model_id"):
-                        log_info(f"Modèle: https://huggingface.co/{report['hf_model_id']}")
-                else:
-                    log_warning("Modèle non mis à jour (amélioration insuffisante)")
-                
-                return True
-                
-            except Exception as e:
-                log_error(f"Erreur lecture rapport: {e}")
-                return False
+    # Vérifier si le dataset contient des corrélations
+    try:
+        df = pd.read_csv(dataset_path)
+        has_correlations = 'correlations' in df.columns and df['correlations'].notna().any()
+        
+        if has_correlations:
+            log_info("🌐 Détection de corrélations dans le dataset - entraînement triple activé")
+            target_columns = ['label', 'importance', 'correlations']
         else:
-            log_warning("Rapport d'entraînement non trouvé")
-            return False
-    else:
-        return False
+            log_info("📊 Dataset standard - entraînement sentiment + importance")
+            target_columns = ['label', 'importance']
+    except Exception as e:
+        log_warning(f"Impossible de vérifier les colonnes du dataset: {e}")
+        target_columns = ['label', 'importance']
+    
+    # Entraîner chaque modèle
+    success_count = 0
+    for target_col in target_columns:
+        log_header(f"Entraînement {target_col.upper()}")
+        
+        # Générer le répertoire de sortie
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = f"models/incremental_{target_col}_{mode}_{timestamp}"
+        
+        # Construire la commande
+        cmd = [
+            "python", "scripts/finetune.py",
+            "--incremental",
+            "--mode", mode,
+            "--dataset", str(dataset_path),
+            "--output_dir", output_dir,
+            "--target-column", target_col
+        ]
+        
+        if force_update:
+            cmd.append("--force-update")
+        
+        # Exécuter l'entraînement
+        if run_command(cmd, f"Apprentissage incrémental {target_col} (mode: {mode})"):
+            # Vérifier les résultats
+            report_path = Path(output_dir) / "incremental_training_report.json"
+            if report_path.exists():
+                try:
+                    with open(report_path) as f:
+                        report = json.load(f)
+                    
+                    baseline_acc = report.get("baseline_metrics", {}).get("accuracy", 0)
+                    new_acc = report.get("new_metrics", {}).get("accuracy", 0)
+                    model_updated = report.get("model_updated", False)
+                    
+                    log_info(f"Baseline accuracy: {baseline_acc:.3f}")
+                    log_info(f"Nouvelle accuracy: {new_acc:.3f}")
+                    
+                    if model_updated:
+                        log_success(f"🚀 Modèle {target_col} mis à jour sur HuggingFace!")
+                        if report.get("hf_model_id"):
+                            log_info(f"Modèle: https://huggingface.co/{report['hf_model_id']}")
+                    else:
+                        log_warning(f"Modèle {target_col} non mis à jour (amélioration insuffisante)")
+                    
+                    success_count += 1
+                    
+                except Exception as e:
+                    log_error(f"Erreur lecture rapport {target_col}: {e}")
+            else:
+                log_warning(f"Rapport d'entraînement {target_col} non trouvé")
+        else:
+            log_error(f"Échec de l'entraînement {target_col}")
+    
+    # Résumé
+    log_header("Résumé de l'entraînement triple")
+    log_info(f"Modèles entraînés avec succès: {success_count}/{len(target_columns)}")
+    
+    return success_count > 0
 
 def show_status():
     """Affichage du statut des modèles"""
@@ -389,7 +415,7 @@ def run_full_pipeline(config: Dict) -> bool:
         log_error("Pipeline interrompu lors de la collecte")
         return False
     
-    # Étape 2: Apprentissage incrémental
+    # Étape 2: Apprentissage incrémental (maintenant triple si corrélations présentes)
     if not run_incremental_training(
         dataset_path=dataset_path,
         mode=config['mode'],
@@ -405,16 +431,17 @@ def run_full_pipeline(config: Dict) -> bool:
     print(f"   ✅ Collecte automatique terminée")
     print(f"   ✅ Labelling ML automatique terminé")
     print(f"   ✅ Apprentissage incrémental terminé")
+    print(f"   🌐 Support corrélations activé si détecté dans le dataset")
     
     if config['mode'] == 'production':
-        print(f"   🚀 {Colors.GREEN}Modèle de production potentiellement mis à jour{Colors.NC}")
+        print(f"   🚀 {Colors.GREEN}Modèles de production potentiellement mis à jour{Colors.NC}")
         print(f"   💡 Vérifiez les métriques pour confirmer l'amélioration")
     else:
-        print(f"   🔬 Modèle testé en mode {config['mode']}")
+        print(f"   🔬 Modèles testés en mode {config['mode']}")
     
     print(f"\n{Colors.WHITE}🔄 Prochaines étapes suggérées:{Colors.NC}")
-    print(f"   1. Vérifier les performances du modèle")
-    print(f"   2. Tester le modèle sur votre site TradePulse")
+    print(f"   1. Vérifier les performances des modèles")
+    print(f"   2. Tester les modèles sur votre site TradePulse")
     print(f"   3. Surveiller les performances en production")
     
     return True
@@ -508,7 +535,7 @@ def main():
     
     elif args.mode == "production":
         # Mode production avec confirmation
-        log_warning("Mode PRODUCTION - mettra à jour le modèle stable!")
+        log_warning("Mode PRODUCTION - mettra à jour les modèles stables!")
         confirm = input("Confirmer? (y/N): ").strip().lower()
         if not confirm.startswith('y'):
             log_info("Annulé")
