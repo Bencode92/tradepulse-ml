@@ -6,6 +6,84 @@
     <title>TradePulse – Éditeur & GitHub Sync</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+      /* Styles pour le multi-select des corrélations */
+      .correlation-dropdown {
+        position: relative;
+        display: inline-block;
+      }
+      
+      .correlation-dropdown-content {
+        display: none;
+        position: absolute;
+        background-color: rgba(30, 41, 59, 0.95);
+        min-width: 300px;
+        max-height: 400px;
+        overflow-y: auto;
+        box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+        z-index: 1000;
+        border: 1px solid rgba(147, 51, 234, 0.3);
+        border-radius: 0.5rem;
+        backdrop-filter: blur(10px);
+      }
+      
+      .correlation-dropdown.active .correlation-dropdown-content {
+        display: block;
+      }
+      
+      .correlation-option {
+        padding: 8px 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: background-color 0.2s;
+      }
+      
+      .correlation-option:hover {
+        background-color: rgba(147, 51, 234, 0.2);
+      }
+      
+      .correlation-option.selected {
+        background-color: rgba(147, 51, 234, 0.3);
+      }
+      
+      .correlation-checkbox {
+        width: 16px;
+        height: 16px;
+        accent-color: #a855f7;
+      }
+      
+      .correlation-dropdown-button {
+        padding: 6px 12px;
+        background-color: rgba(147, 51, 234, 0.2);
+        border: 1px solid rgba(147, 51, 234, 0.5);
+        color: #d8b4fe;
+        cursor: pointer;
+        border-radius: 0.375rem;
+        font-size: 0.75rem;
+        transition: all 0.2s;
+      }
+      
+      .correlation-dropdown-button:hover {
+        background-color: rgba(147, 51, 234, 0.3);
+        transform: translateY(-1px);
+      }
+      
+      /* Scrollbar styling */
+      .correlation-dropdown-content::-webkit-scrollbar {
+        width: 8px;
+      }
+      
+      .correlation-dropdown-content::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.2);
+      }
+      
+      .correlation-dropdown-content::-webkit-scrollbar-thumb {
+        background: rgba(147, 51, 234, 0.5);
+        border-radius: 4px;
+      }
+    </style>
   </head>
   <body class="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
     <div class="max-w-7xl mx-auto space-y-6">
@@ -125,6 +203,92 @@
     </div>
 
     <script>
+      // Liste complète des corrélations possibles
+      const ALL_CORRELATIONS = [
+        "AE:DIAMONDS", "AE:PETROLEUM_CRUDE",
+        "AR:CORN",
+        "AU:ALUMINIUM_ORE", "AU:COAL", "AU:IRON_ORE", "AU:NATGAS", "AU:WHEAT", "AU:ZINC_ORE",
+        "BE:ZINC_METAL",
+        "BO:ZINC_ORE",
+        "BR:COFFEE", "BR:CORN", "BR:IRON_ORE", "BR:MEAT", "BR:SOYBEAN", "BR:SUGAR",
+        "CA:ALUMINIUM_METAL", "CA:NICKEL_METAL", "CA:WHEAT",
+        "CD:COPPER_REFINED",
+        "CH:GOLD", "CH:PHARMACEUTICALS",
+        "CL:COPPER_ORE", "CL:COPPER_REFINED", "CL:COPPER_UNREFINED",
+        "CN:APPAREL", "CN:CARBON", "CN:CHEMICALS_MISC", "CN:CHEMICALS_ORGANIC", "CN:ELECTRICAL_MACHINERY", 
+        "CN:FURNITURE", "CN:MACHINERY", "CN:NICKEL_METAL", "CN:OPTICAL_INSTRUMENTS", "CN:PAPER", 
+        "CN:PLASTICS", "CN:RARE_GASES", "CN:RUBBER", "CN:SHIPS", "CN:SILVER", "CN:TOYS", "CN:VEHICLES", "CN:WOOD",
+        "DE:AIRCRAFT", "DE:CHEMICALS_MISC", "DE:COCOA", "DE:FINANCIAL_SERVICES", "DE:OPTICAL_INSTRUMENTS", 
+        "DE:PAPER", "DE:PHARMACEUTICALS", "DE:RARE_GASES", "DE:VEHICLES",
+        "FI:NICKEL_ORE",
+        "FR:AIRCRAFT", "FR:BEVERAGES", "FR:COSMETICS", "FR:ELECTRICITY", "FR:FINANCIAL_SERVICES",
+        "GB:GOLD", "GB:PLATINUM", "GB:SILVER",
+        "GN:ALUMINIUM_ORE",
+        "HK:DIAMONDS", "HK:ELECTRICAL_MACHINERY", "HK:SILVER",
+        "ID:COAL", "ID:FERROALLOYS", "ID:PALM_OIL", "ID:TIN",
+        "IN:DIAMONDS", "IN:IT_SERVICES", "IN:RICE",
+        "KR:SHIPS",
+        "KZ:URANIUM",
+        "LU:FINANCIAL_SERVICES",
+        "MX:LEAD_ORE", "MX:PRECIOUS_METALS_ORE",
+        "MY:PALM_OIL",
+        "NA:URANIUM",
+        "NG:URANIUM",
+        "NL:COCOA",
+        "NO:FISH", "NO:NATGAS", "NO:NICKEL_METAL",
+        "PK:RICE",
+        "PE:COPPER_ORE", "PE:LEAD_ORE", "PE:PRECIOUS_METALS_ORE", "PE:TIN", "PE:ZINC_ORE",
+        "PH:NICKEL_ORE",
+        "QA:NATGAS",
+        "RU:COAL", "RU:PETROLEUM_CRUDE", "RU:PRECIOUS_METALS_ORE", "RU:WHEAT",
+        "SE:COPPER_UNREFINED",
+        "SG:FINANCIAL_SERVICES",
+        "TH:RICE",
+        "UA:CORN",
+        "US:CHEMICALS_MISC", "US:CHEMICALS_ORGANIC", "US:CORN", "US:DIAMONDS", "US:EDIBLE_FRUITS", 
+        "US:LEAD_ORE", "US:MEAT", "US:NATGAS", "US:OPTICAL_INSTRUMENTS", "US:PETROLEUM_CRUDE", 
+        "US:PETROLEUM_REFINED", "US:PHARMACEUTICALS", "US:PLASTICS", "US:PLATINUM", "US:RARE_GASES", 
+        "US:SOYBEAN", "US:TRAVEL", "US:WHEAT", "US:ZINC_ORE",
+        "VN:FOOTWEAR", "VN:RICE",
+        "ZA:FERROALLOYS", "ZA:PLATINUM",
+        "ZM:COPPER_UNREFINED"
+      ];
+
+      // Mapping des codes produits vers labels français
+      const PRODUCT_LABELS = {
+        "DIAMONDS": "Diamants", "PETROLEUM_CRUDE": "Pétrole brut", "CORN": "Maïs", 
+        "ALUMINIUM_ORE": "Minerai d'aluminium", "COAL": "Charbon", "IRON_ORE": "Minerai de fer",
+        "NATGAS": "Gaz naturel", "WHEAT": "Blé", "ZINC_ORE": "Minerai de zinc",
+        "ZINC_METAL": "Zinc brut", "COFFEE": "Café", "MEAT": "Viande", "SOYBEAN": "Soja",
+        "SUGAR": "Sucre", "ALUMINIUM_METAL": "Aluminium brut", "NICKEL_METAL": "Nickel brut",
+        "COPPER_REFINED": "Cuivre raffiné", "GOLD": "Or", "PHARMACEUTICALS": "Produits pharmaceutiques",
+        "COPPER_ORE": "Minerai de cuivre", "COPPER_UNREFINED": "Cuivre non raffiné",
+        "APPAREL": "Vêtements", "CARBON": "Carbone", "CHEMICALS_MISC": "Produits chimiques divers",
+        "CHEMICALS_ORGANIC": "Produits chimiques organiques", "ELECTRICAL_MACHINERY": "Machines électriques",
+        "FURNITURE": "Meubles", "MACHINERY": "Machines", "OPTICAL_INSTRUMENTS": "Instruments optiques",
+        "PAPER": "Papier", "PLASTICS": "Plastiques", "RARE_GASES": "Gaz rares", "RUBBER": "Caoutchouc",
+        "SHIPS": "Navires", "SILVER": "Argent", "TOYS": "Jouets", "VEHICLES": "Véhicules",
+        "WOOD": "Bois", "AIRCRAFT": "Aéronefs", "COCOA": "Cacao", "FINANCIAL_SERVICES": "Services financiers",
+        "NICKEL_ORE": "Minerai de nickel", "BEVERAGES": "Boissons", "COSMETICS": "Cosmétiques",
+        "ELECTRICITY": "Électricité", "PLATINUM": "Platine", "FERROALLOYS": "Ferro-alliages",
+        "PALM_OIL": "Huile de palme", "TIN": "Étain", "IT_SERVICES": "Services informatiques",
+        "RICE": "Riz", "URANIUM": "Uranium", "LEAD_ORE": "Minerai de plomb",
+        "PRECIOUS_METALS_ORE": "Minerais de métaux précieux", "FISH": "Poisson",
+        "PETROLEUM_REFINED": "Pétrole raffiné", "EDIBLE_FRUITS": "Fruits comestibles",
+        "TRAVEL": "Services de voyage", "FOOTWEAR": "Chaussures"
+      };
+
+      // Country flags
+      const COUNTRY_FLAGS = {
+        "AE": "🇦🇪", "AR": "🇦🇷", "AU": "🇦🇺", "BE": "🇧🇪", "BO": "🇧🇴", "BR": "🇧🇷",
+        "CA": "🇨🇦", "CD": "🇨🇩", "CH": "🇨🇭", "CL": "🇨🇱", "CN": "🇨🇳", "DE": "🇩🇪",
+        "FI": "🇫🇮", "FR": "🇫🇷", "GB": "🇬🇧", "GN": "🇬🇳", "HK": "🇭🇰", "ID": "🇮🇩",
+        "IN": "🇮🇳", "KR": "🇰🇷", "KZ": "🇰🇿", "LU": "🇱🇺", "MX": "🇲🇽", "MY": "🇲🇾",
+        "NA": "🇳🇦", "NG": "🇳🇬", "NL": "🇳🇱", "NO": "🇳🇴", "PK": "🇵🇰", "PE": "🇵🇪",
+        "PH": "🇵🇭", "QA": "🇶🇦", "RU": "🇷🇺", "SE": "🇸🇪", "SG": "🇸🇬", "TH": "🇹🇭",
+        "UA": "🇺🇦", "US": "🇺🇸", "VN": "🇻🇳", "ZA": "🇿🇦", "ZM": "🇿🇲"
+      };
+
       // 🔧 COULEURS AVEC NORMALISATION D'ACCENTS
       const labelColors = {
         positive: 'text-green-400',
@@ -235,6 +399,109 @@
       let rows = [];
       let currentFilename = '';
       let currentSha = null;
+
+      // Fonction pour créer le dropdown de corrélations
+      function createCorrelationDropdown(rowIndex) {
+        const currentCorrelations = (rows[rowIndex].correlations || '').split(';').filter(c => c.trim());
+        
+        let dropdownHtml = `
+          <div class="correlation-dropdown" data-row="${rowIndex}">
+            <button class="correlation-dropdown-button" onclick="toggleCorrelationDropdown(${rowIndex})">
+              📊 Sélectionner corrélations (${currentCorrelations.length})
+            </button>
+            <div class="correlation-dropdown-content">
+              <div class="p-2 border-b border-gray-700">
+                <input type="text" placeholder="Rechercher..." class="w-full px-2 py-1 bg-black/20 text-white text-sm rounded" onkeyup="filterCorrelations(${rowIndex}, this.value)">
+              </div>
+        `;
+        
+        ALL_CORRELATIONS.forEach(corr => {
+          const [country, product] = corr.split(':');
+          const flag = COUNTRY_FLAGS[country] || '🌍';
+          const productLabel = PRODUCT_LABELS[product] || product;
+          const isChecked = currentCorrelations.includes(corr);
+          
+          dropdownHtml += `
+            <div class="correlation-option ${isChecked ? 'selected' : ''}" data-correlation="${corr}">
+              <input type="checkbox" class="correlation-checkbox" 
+                     ${isChecked ? 'checked' : ''} 
+                     onchange="updateCorrelation(${rowIndex}, '${corr}', this.checked)">
+              <span class="text-sm text-gray-200">${flag} ${country}: ${productLabel}</span>
+            </div>
+          `;
+        });
+        
+        dropdownHtml += `</div></div>`;
+        return dropdownHtml;
+      }
+
+      // Toggle dropdown
+      window.toggleCorrelationDropdown = function(rowIndex) {
+        const dropdown = document.querySelector(`.correlation-dropdown[data-row="${rowIndex}"]`);
+        dropdown.classList.toggle('active');
+        
+        // Fermer les autres dropdowns
+        document.querySelectorAll('.correlation-dropdown').forEach(d => {
+          if (d !== dropdown) d.classList.remove('active');
+        });
+      };
+
+      // Filter correlations
+      window.filterCorrelations = function(rowIndex, searchTerm) {
+        const dropdown = document.querySelector(`.correlation-dropdown[data-row="${rowIndex}"]`);
+        const options = dropdown.querySelectorAll('.correlation-option');
+        
+        options.forEach(option => {
+          const text = option.textContent.toLowerCase();
+          if (text.includes(searchTerm.toLowerCase())) {
+            option.style.display = 'flex';
+          } else {
+            option.style.display = 'none';
+          }
+        });
+      };
+
+      // Update correlation
+      window.updateCorrelation = function(rowIndex, correlation, isChecked) {
+        const currentCorrelations = (rows[rowIndex].correlations || '').split(';').filter(c => c.trim());
+        
+        if (isChecked) {
+          if (!currentCorrelations.includes(correlation)) {
+            currentCorrelations.push(correlation);
+          }
+        } else {
+          const index = currentCorrelations.indexOf(correlation);
+          if (index > -1) {
+            currentCorrelations.splice(index, 1);
+          }
+        }
+        
+        rows[rowIndex].correlations = currentCorrelations.join(';');
+        
+        // Update visual state
+        const option = document.querySelector(`.correlation-dropdown[data-row="${rowIndex}"] .correlation-option[data-correlation="${correlation}"]`);
+        if (option) {
+          option.classList.toggle('selected', isChecked);
+        }
+        
+        // Update button text
+        const button = document.querySelector(`.correlation-dropdown[data-row="${rowIndex}"] .correlation-dropdown-button`);
+        if (button) {
+          button.textContent = `📊 Sélectionner corrélations (${currentCorrelations.length})`;
+        }
+        
+        updateStats();
+        statusSpan.textContent = `Ligne ${rowIndex + 1}: corrélations mises à jour`;
+      };
+
+      // Close dropdowns when clicking outside
+      document.addEventListener('click', function(event) {
+        if (!event.target.closest('.correlation-dropdown')) {
+          document.querySelectorAll('.correlation-dropdown').forEach(d => {
+            d.classList.remove('active');
+          });
+        }
+      });
 
       // 🔧 VALIDATION avec normalisation et corrélations
       function validateDataset() {
@@ -427,17 +694,15 @@
               const corrs = (row.correlations || '').split(';').filter(c => c.trim());
               html += `
                 <td class="px-4 py-3">
-                  <div class="flex flex-wrap gap-1 items-center">
-                    ${corrs.map(corr => {
-                      const [country, product] = corr.split(':');
-                      return `<span class="px-2 py-1 text-xs bg-purple-500/20 text-purple-300 rounded border border-purple-500/30">${country}:${product || '?'}</span>`;
-                    }).join('')}
-                    <input type="text" 
-                           data-row="${rIdx}" 
-                           data-col="correlations"
-                           placeholder="US:CORN;CN:SOYBEAN"
-                           value="${row.correlations || ''}"
-                           class="ml-2 px-2 py-1 bg-transparent text-xs text-gray-300 border-b border-gray-600 focus:border-purple-400 focus:outline-none" />
+                  <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap gap-1">
+                      ${corrs.map(corr => {
+                        const [country, product] = corr.split(':');
+                        const flag = COUNTRY_FLAGS[country] || '🌍';
+                        return `<span class="px-2 py-1 text-xs bg-purple-500/20 text-purple-300 rounded border border-purple-500/30">${flag} ${country}:${product || '?'}</span>`;
+                      }).join('')}
+                    </div>
+                    ${createCorrelationDropdown(rIdx)}
                   </div>
                 </td>`;
             } else {
@@ -461,7 +726,7 @@
         html += `</tbody></table>`;
         tableWrapper.innerHTML = html;
 
-        // 🔧 LISTENERS avec normalisation et corrélations
+        // 🔧 LISTENERS avec normalisation
         tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
           cell.addEventListener('input', () => {
             const r = +cell.dataset.row, c = cell.dataset.col;
@@ -504,16 +769,6 @@
             }
             
             updateStats();
-          });
-        });
-
-        // Listener pour les corrélations
-        tableWrapper.querySelectorAll('input[data-col="correlations"]').forEach(input => {
-          input.addEventListener('input', () => {
-            const r = +input.dataset.row;
-            rows[r].correlations = input.value.trim();
-            updateStats();
-            statusSpan.textContent = `Ligne ${r + 1}: corrélations modifiées`;
           });
         });
 
@@ -737,7 +992,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 HTML avec corrélations chargé');
+        console.log('🔧 HTML avec multi-select corrélations chargé');
       });
     </script>
   </body>
