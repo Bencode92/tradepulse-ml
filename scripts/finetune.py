@@ -2,13 +2,20 @@
 # -*- coding: utf-8 -*-
 
 """
-TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + Class Balancing
-========================================================================================
+TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + Class Balancing + Corrélations
+=========================================================================================================
 
 🎯 NOUVEAU : Modèles Séparés !
 - Sentiment → Bencode92/tradepulse-finbert-sentiment
 - Importance → Bencode92/tradepulse-finbert-importance
+- Corrélations → Bencode92/tradepulse-finbert-correlations (NOUVEAU!)
 - Hub ID automatique selon --target-column
+
+🌐 NOUVEAU : Support Corrélations Multi-Label !
+- --target-column correlations : Entraîne sur les corrélations commodités
+- Classification multi-label (133 labels possibles)
+- Métriques adaptées (F1 micro/macro, Hamming loss)
+- BCEWithLogitsLoss pour multi-label
 
 🚀 NOUVEAU : Apprentissage Incrémental !
 - Mode --incremental : Améliore un modèle existant au lieu de créer un nouveau
@@ -40,7 +47,8 @@ TradePulse – FinBERT Fine‑Tuning Utility avec Apprentissage Incrémental + C
 - Logs informatifs pour debugging
 
 •  Charge un corpus (CSV/JSON) de textes financiers déjà étiquetés
-  en **positive / neutral / negative** ou **critique / importante / générale**.
+  en **positive / neutral / negative** ou **critique / importante / générale**
+  ou **corrélations multi-label**.
 •  Découpe automatiquement en train / validation (80 / 20 stratifié).
 •  Tokenise, fine‑tune et enregistre un FinBERT (ou autre modèle) déjà
   présent sur HuggingFace Hub.
@@ -60,6 +68,14 @@ $ python finetune.py \
     --dataset datasets/news_20250708.csv \
     --output_dir models/finbert-importance \
     --target-column importance \
+    --push
+
+Usage Corrélations avec Hub ID automatique (NOUVEAU!):
+-----------------------------------------------------
+$ python finetune.py \
+    --dataset datasets/news_20250724.csv \
+    --output_dir models/finbert-correlations \
+    --target-column correlations \
     --push
 
 🚀 NOUVEAU - Usage Apprentissage Incrémental:
@@ -94,7 +110,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from datasets import Dataset, DatasetDict
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, f1_score, multilabel_confusion_matrix, hamming_loss
 from sklearn.model_selection import train_test_split
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import (
@@ -110,7 +126,17 @@ from transformers import (
 # 🔧 MODIFICATION 1 : NOUVEAUX IMPORTS pour HuggingFace Git
 from huggingface_hub import Repository, HfApi, create_repo
 
-# 🎯 NOUVEAU : Configuration des modèles spécialisés
+# 🌐 NOUVEAU : Import du mapping des corrélations
+try:
+    from config.correlation_mapping import COMMODITY_CODES, correlations_to_labels, labels_to_correlations
+    CORRELATION_SUPPORT = True
+except ImportError:
+    logger = logging.getLogger("tradepulse-finetune")
+    logger.warning("⚠️ correlation_mapping non trouvé, support des corrélations désactivé")
+    CORRELATION_SUPPORT = False
+    COMMODITY_CODES = []
+
+# 🎯 NOUVEAU : Configuration des modèles spécialisés (ajout corrélations)
 MODELS_CONFIG = {
     "sentiment": {
         "production": {
@@ -137,6 +163,19 @@ MODELS_CONFIG = {
             "auto_update": False,
         },
         "fallback": "yiyanghkust/finbert-tone"
+    },
+    "correlations": {  # 🌐 NOUVEAU
+        "production": {
+            "hf_id": "Bencode92/tradepulse-finbert-correlations",
+            "description": "Modèle corrélations multi-label pour TradePulse",
+            "auto_update": True,
+        },
+        "development": {
+            "hf_id": "Bencode92/tradepulse-finbert-correlations-dev",
+            "description": "Modèle corrélations dev pour tests",
+            "auto_update": False,
+        },
+        "fallback": "yiyanghkust/finbert-tone"
     }
 }
 
@@ -145,6 +184,9 @@ PERFORMANCE_THRESHOLDS = {
     "min_accuracy": 0.70,      # Précision minimum acceptable (réduit pour petits datasets)
     "min_f1": 0.65,            # F1-score minimum (réduit pour petits datasets)
     "improvement_threshold": 0.02,  # Amélioration minimum pour mise à jour (2%)
+    # 🌐 NOUVEAU : Seuils pour multi-label
+    "min_f1_micro": 0.50,      # F1 micro minimum pour corrélations
+    "min_hamming": 0.85,       # Score Hamming minimum (1 - hamming_loss)
 }
 
 # Auto-sélection helper (existant, conservé)
@@ -231,13 +273,19 @@ class CustomTrainer(Trainer):
             if hasattr(outputs, "loss") and outputs.loss is not None:
                 loss = outputs.loss
             else:
-                loss = nn.functional.cross_entropy(outputs.logits, labels)
+                # 🌐 NOUVEAU : BCEWithLogitsLoss pour multi-label
+                if hasattr(self, 'is_multi_label') and self.is_multi_label:
+                    loss = nn.functional.binary_cross_entropy_with_logits(
+                        outputs.logits, labels.float()
+                    )
+                else:
+                    loss = nn.functional.cross_entropy(outputs.logits, labels)
                 
         return (loss, outputs) if return_outputs else loss
 
 
 # ---------------------------------------------------------------------------
-# Fine‑tuner class (adapté pour supporter l'incrémental + importance + class balancing)
+# Fine‑tuner class (adapté pour supporter l'incrémental + importance + class balancing + corrélations)
 # ---------------------------------------------------------------------------
 class Finetuner:
     # 😊 Labels pour sentiment (existant)
@@ -260,8 +308,20 @@ class Finetuner:
         self.mode = mode  # 🎯 NOUVEAU : Stocker le mode
         self.class_weights = None  # ⚖️ NOUVEAU
         
-        # 🎯 NOUVEAU : Détermination automatique du hub_id
-        self.task_type = "sentiment" if target_column == "label" else "importance"
+        # 🌐 NOUVEAU : Détection du type de tâche
+        if target_column == "correlations":
+            self.task_type = "correlations"
+            self.is_multi_label = True
+            self.num_labels = len(COMMODITY_CODES) if CORRELATION_SUPPORT else 133
+        elif target_column == "importance":
+            self.task_type = "importance"
+            self.is_multi_label = False
+            self.num_labels = 3
+        else:
+            self.task_type = "sentiment"
+            self.is_multi_label = False
+            self.num_labels = 3
+        
         self.hub_id = self._get_hub_id()
         
         # 🔧 MODIFICATION 2 : Clone du repo HuggingFace dès l'initialisation avec corrections
@@ -343,6 +403,11 @@ class Finetuner:
             self.LABEL_MAP = self.IMPORTANCE_LABEL_MAP
             self.ID2LABEL = self.IMPORTANCE_ID2LABEL
             logger.info(f"🎯 Mode entraînement : IMPORTANCE → {self.hub_id}")
+        elif target_column == "correlations":
+            # 🌐 NOUVEAU : Pas de label map pour multi-label
+            self.LABEL_MAP = None
+            self.ID2LABEL = {i: code for i, code in enumerate(COMMODITY_CODES)} if CORRELATION_SUPPORT else {}
+            logger.info(f"🌐 Mode entraînement : CORRÉLATIONS MULTI-LABEL ({self.num_labels} labels) → {self.hub_id}")
         else:
             self.LABEL_MAP = self.SENTIMENT_LABEL_MAP
             self.ID2LABEL = self.SENTIMENT_ID2LABEL
@@ -357,12 +422,21 @@ class Finetuner:
             try:
                 logger.info(f"📥 Tentative de chargement du modèle existant: {baseline_model}")
                 self.tokenizer = AutoTokenizer.from_pretrained(baseline_model)
-                self.model = AutoModelForSequenceClassification.from_pretrained(
-                    baseline_model,
-                    num_labels=3,
-                    id2label=self.ID2LABEL,
-                    label2id=self.LABEL_MAP,
-                )
+                
+                # 🌐 NOUVEAU : Configuration selon le type de tâche
+                if self.is_multi_label:
+                    self.model = AutoModelForSequenceClassification.from_pretrained(
+                        baseline_model,
+                        num_labels=self.num_labels,
+                        problem_type="multi_label_classification"
+                    )
+                else:
+                    self.model = AutoModelForSequenceClassification.from_pretrained(
+                        baseline_model,
+                        num_labels=self.num_labels,
+                        id2label=self.ID2LABEL,
+                        label2id=self.LABEL_MAP,
+                    )
                 logger.info(f"✅ Modèle incrémental chargé: {baseline_model}")
                 self.model_name = baseline_model  # Update model name
             except Exception as e:
@@ -370,22 +444,39 @@ class Finetuner:
                 logger.warning(f"⚠️ Impossible de charger {baseline_model}: {e}")
                 logger.info(f"🔄 Fallback sur modèle de base: {model_name}")
                 self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model = AutoModelForSequenceClassification.from_pretrained(
-                    model_name,
-                    num_labels=3,
-                    id2label=self.ID2LABEL,
-                    label2id=self.LABEL_MAP,
-                )
+                
+                if self.is_multi_label:
+                    self.model = AutoModelForSequenceClassification.from_pretrained(
+                        model_name,
+                        num_labels=self.num_labels,
+                        problem_type="multi_label_classification"
+                    )
+                else:
+                    self.model = AutoModelForSequenceClassification.from_pretrained(
+                        model_name,
+                        num_labels=self.num_labels,
+                        id2label=self.ID2LABEL,
+                        label2id=self.LABEL_MAP,
+                    )
                 self.baseline_model = model_name
         else:
             # Mode classique (existant, conservé)
             self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name,
-                num_labels=3,
-                id2label=self.ID2LABEL,
-                label2id=self.LABEL_MAP,
-            )
+            
+            # 🌐 NOUVEAU : Configuration selon le type de tâche
+            if self.is_multi_label:
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    num_labels=self.num_labels,
+                    problem_type="multi_label_classification"
+                )
+            else:
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    model_name,
+                    num_labels=self.num_labels,
+                    id2label=self.ID2LABEL,
+                    label2id=self.LABEL_MAP,
+                )
             logger.info("✅ Model & tokenizer loaded : %s", model_name)
 
     def _setup_gitignore(self):
@@ -420,7 +511,7 @@ tmp_eval/
         """🎯 NOUVEAU : Retourne le hub_id approprié selon target_column et mode"""
         try:
             # Déterminer le type de tâche
-            task_type = "sentiment" if self.target_column == "label" else "importance"
+            task_type = self.task_type
             
             if self.mode in ["production", "development"]:
                 return MODELS_CONFIG[task_type][self.mode]["hf_id"]
@@ -489,12 +580,15 @@ tmp_eval/
             report_to=[],  # Pas de logging externe
         )
         
+        # 🌐 NOUVEAU : Utiliser les bonnes métriques selon le type
+        compute_metrics_fn = self._metrics_multilabel if self.is_multi_label else self._metrics_balanced
+        
         trainer = Trainer(
             model=self.model,
             args=eval_args,
             eval_dataset=eval_dataset,
             tokenizer=self.tokenizer,
-            compute_metrics=self._metrics_balanced,  # ⚖️ Utiliser métriques adaptées
+            compute_metrics=compute_metrics_fn,
         )
         
         metrics = trainer.evaluate()
@@ -508,6 +602,13 @@ tmp_eval/
             "recall": metrics.get("eval_recall", 0.0),
         }
         
+        # 🌐 NOUVEAU : Métriques spécifiques multi-label
+        if self.is_multi_label:
+            clean_metrics.update({
+                "f1_micro": metrics.get("eval_f1_micro", 0.0),
+                "hamming_score": metrics.get("eval_hamming_score", 0.0),
+            })
+        
         return clean_metrics
 
     def should_update_model(self, baseline_metrics: Dict[str, float], new_metrics: Dict[str, float], 
@@ -516,25 +617,40 @@ tmp_eval/
         
         min_improvement = min_improvement or PERFORMANCE_THRESHOLDS["improvement_threshold"]
         
-        # ⚖️ NOUVEAU : Utiliser F1 macro pour datasets déséquilibrés
-        primary_metric = "f1_macro" if "f1_macro" in new_metrics else "f1"
-        primary_threshold = PERFORMANCE_THRESHOLDS["min_f1"]
+        # 🌐 NOUVEAU : Métriques différentes pour multi-label
+        if self.is_multi_label:
+            primary_metric = "f1_micro"
+            primary_threshold = PERFORMANCE_THRESHOLDS["min_f1_micro"]
+            
+            # Vérification Hamming score
+            if new_metrics.get("hamming_score", 0) < PERFORMANCE_THRESHOLDS["min_hamming"]:
+                return False, f"Hamming score insuffisant: {new_metrics.get('hamming_score', 0):.3f} < {PERFORMANCE_THRESHOLDS['min_hamming']}"
+        else:
+            primary_metric = "f1_macro" if "f1_macro" in new_metrics else "f1"
+            primary_threshold = PERFORMANCE_THRESHOLDS["min_f1"]
         
         # Vérification des seuils minimum
-        if new_metrics["accuracy"] < PERFORMANCE_THRESHOLDS["min_accuracy"]:
+        if not self.is_multi_label and new_metrics["accuracy"] < PERFORMANCE_THRESHOLDS["min_accuracy"]:
             return False, f"Précision insuffisante: {new_metrics['accuracy']:.3f} < {PERFORMANCE_THRESHOLDS['min_accuracy']}"
         
-        if new_metrics[primary_metric] < primary_threshold:
-            return False, f"{primary_metric} insuffisant: {new_metrics[primary_metric]:.3f} < {primary_threshold}"
+        if new_metrics.get(primary_metric, 0) < primary_threshold:
+            return False, f"{primary_metric} insuffisant: {new_metrics.get(primary_metric, 0):.3f} < {primary_threshold}"
         
         # Vérification de l'amélioration
-        accuracy_improvement = new_metrics["accuracy"] - baseline_metrics["accuracy"]
-        f1_improvement = new_metrics[primary_metric] - baseline_metrics.get(primary_metric, baseline_metrics["f1"])
+        if self.is_multi_label:
+            f1_improvement = new_metrics.get(primary_metric, 0) - baseline_metrics.get(primary_metric, 0)
+            hamming_improvement = new_metrics.get("hamming_score", 0) - baseline_metrics.get("hamming_score", 0)
+            
+            if f1_improvement >= min_improvement or hamming_improvement >= min_improvement:
+                return True, f"Amélioration détectée - {primary_metric}: +{f1_improvement:.3f}, Hamming: +{hamming_improvement:.3f}"
+        else:
+            accuracy_improvement = new_metrics["accuracy"] - baseline_metrics["accuracy"]
+            f1_improvement = new_metrics[primary_metric] - baseline_metrics.get(primary_metric, baseline_metrics["f1"])
+            
+            if accuracy_improvement >= min_improvement or f1_improvement >= min_improvement:
+                return True, f"Amélioration détectée - Accuracy: +{accuracy_improvement:.3f}, {primary_metric}: +{f1_improvement:.3f}"
         
-        if accuracy_improvement >= min_improvement or f1_improvement >= min_improvement:
-            return True, f"Amélioration détectée - Accuracy: +{accuracy_improvement:.3f}, {primary_metric}: +{f1_improvement:.3f}"
-        
-        return False, f"Amélioration insuffisante - Accuracy: {accuracy_improvement:+.3f}, {primary_metric}: {f1_improvement:+.3f} (min: {min_improvement})"
+        return False, f"Amélioration insuffisante (min: {min_improvement})"
 
     # 🔧 CORRECTION API HuggingFace Hub : push_to_huggingface() avec nouvelle API ≥0.22.0
     def push_to_huggingface(self, commit_message: str = None):
@@ -615,7 +731,7 @@ tmp_eval/
             raise
 
     # -------------------------------------------------------------------
-    # Data helpers (adaptés pour supporter le mode incrémental + petits datasets + importance)
+    # Data helpers (adaptés pour supporter le mode incrémental + petits datasets + importance + corrélations)
     # -------------------------------------------------------------------
     def _load_raw(self, path: Path) -> List[Dict[str, str]]:
         if path.suffix.lower() == ".csv":
@@ -631,37 +747,56 @@ tmp_eval/
                 f"{row.get('title', '')} {row.get('content', '')}"
             ).strip()
             
-            # 🔧 FIX : Nettoyage robuste des labels
-            if self.target_column == "importance":
-                label_raw = row.get("importance", "")
+            # 🌐 NOUVEAU : Gestion des corrélations multi-label
+            if self.target_column == "correlations":
+                correlations_str = row.get("correlations", "")
+                if not correlations_str or not text:
+                    continue
+                
+                # Convertir en labels binaires
+                if CORRELATION_SUPPORT:
+                    labels = correlations_to_labels(correlations_str)
+                else:
+                    # Fallback si pas de support
+                    labels = [0] * self.num_labels
+                
+                out.append({"text": text, "labels": labels})
             else:
-                label_raw = (
-                    row.get("label") 
-                    or row.get("sentiment") 
-                    or row.get("impact") 
-                    or ""
-                )
-            
-            # 🔧 FIX : Nettoyage strict
-            if label_raw is None:
-                label_raw = ""
-            
-            label = str(label_raw).strip().lower()
-            
-            # 🔧 FIX : Debug si label non reconnu
-            if label and label not in self.LABEL_MAP:
-                logger.warning(f"⚠️ Label non reconnu: '{label}' (raw: '{label_raw}') pour target_column='{self.target_column}'")
-                logger.warning(f"Labels attendus: {list(self.LABEL_MAP.keys())}")
-                continue
+                # Gestion classique (sentiment/importance)
+                if self.target_column == "importance":
+                    label_raw = row.get("importance", "")
+                else:
+                    label_raw = (
+                        row.get("label") 
+                        or row.get("sentiment") 
+                        or row.get("impact") 
+                        or ""
+                    )
                 
-            if not text or not label:
-                continue
+                # 🔧 FIX : Nettoyage strict
+                if label_raw is None:
+                    label_raw = ""
                 
-            out.append({"text": text, "label": self.LABEL_MAP[label]})
+                label = str(label_raw).strip().lower()
+                
+                # 🔧 FIX : Debug si label non reconnu
+                if label and label not in self.LABEL_MAP:
+                    logger.warning(f"⚠️ Label non reconnu: '{label}' (raw: '{label_raw}') pour target_column='{self.target_column}'")
+                    logger.warning(f"Labels attendus: {list(self.LABEL_MAP.keys())}")
+                    continue
+                    
+                if not text or not label:
+                    continue
+                    
+                out.append({"text": text, "label": self.LABEL_MAP[label]})
         return out
 
     def _check_dataset_balance(self, data: List[Dict[str, str]]) -> bool:
         """Vérifie si le dataset est suffisamment équilibré pour un split stratifié"""
+        # 🌐 NOUVEAU : Pas de stratification pour multi-label
+        if self.is_multi_label:
+            return False
+        
         label_counts = Counter([d["label"] for d in data])
         
         logger.info(f"📊 Distribution des labels: {dict(label_counts)}")
@@ -692,8 +827,14 @@ tmp_eval/
             raise RuntimeError("No usable samples detected in dataset !")
         logger.info("📊 %d samples after cleaning", len(data))
 
-        # 🔧 CORRECTION : Vérifier si on peut faire un split stratifié
-        can_stratify = self._check_dataset_balance(data)
+        # 🌐 NOUVEAU : Gestion différente pour multi-label
+        if self.is_multi_label:
+            # Pour multi-label, pas de stratification possible
+            can_stratify = False
+            label_field = "labels"
+        else:
+            can_stratify = self._check_dataset_balance(data)
+            label_field = "label"
         
         if self.incremental_mode:
             # 🚀 NOUVEAU : Division en 3 parties pour l'apprentissage incrémental
@@ -703,19 +844,19 @@ tmp_eval/
                 train_val, test_data = train_test_split(
                     data,
                     test_size=0.1,
-                    stratify=[d["label"] for d in data],
+                    stratify=[d[label_field] for d in data],
                     random_state=42,
                 )
                 
                 train, val = train_test_split(
                     train_val,
                     test_size=0.25,  # 0.25 de 90% = 22.5% du total ≈ 20%
-                    stratify=[d["label"] for d in train_val] if self._check_dataset_balance(train_val) else None,
+                    stratify=[d[label_field] for d in train_val] if self._check_dataset_balance(train_val) else None,
                     random_state=42,
                 )
             else:
-                # Split simple pour petits datasets
-                logger.warning("⚠️ Dataset trop petit pour split optimal, utilisation de proportions adaptées")
+                # Split simple pour petits datasets ou multi-label
+                logger.warning("⚠️ Dataset trop petit ou multi-label, utilisation de proportions adaptées")
                 
                 if len(data) >= 5:
                     # Au moins 5 échantillons : 1 pour test, reste pour train/val
@@ -742,12 +883,12 @@ tmp_eval/
                 train, val = train_test_split(
                     data,
                     test_size=0.2,
-                    stratify=[d["label"] for d in data],
+                    stratify=[d[label_field] for d in data],
                     random_state=42,
                 )
             else:
-                # Split simple pour petits datasets
-                logger.warning("⚠️ Dataset trop petit ou déséquilibré, split simple sans stratification")
+                # Split simple pour petits datasets ou multi-label
+                logger.warning("⚠️ Dataset trop petit, déséquilibré ou multi-label, split simple sans stratification")
                 split_idx = max(1, int(len(data) * 0.8))
                 train = data[:split_idx]
                 val = data[split_idx:] if len(data) > split_idx else []
@@ -783,7 +924,7 @@ tmp_eval/
         return DatasetDict(train=train_ds, validation=val_ds), test_ds
 
     # -------------------------------------------------------------------
-    # Metrics (⚖️ NOUVEAU : Métriques adaptées aux datasets déséquilibrés)
+    # Metrics (⚖️ NOUVEAU : Métriques adaptées aux datasets déséquilibrés + multi-label)
     # -------------------------------------------------------------------
     @staticmethod
     def _metrics(pred: EvalPrediction) -> Dict[str, float]:
@@ -824,8 +965,51 @@ tmp_eval/
             "recall_macro": rec_macro,
         }
 
+    @staticmethod
+    def _metrics_multilabel(pred: EvalPrediction) -> Dict[str, float]:
+        """🌐 NOUVEAU : Métriques pour classification multi-label"""
+        logits, labels = pred
+        # Convertir logits en prédictions binaires
+        preds = torch.sigmoid(torch.from_numpy(logits)).numpy() > 0.5
+        
+        # F1 micro et macro
+        f1_micro = f1_score(labels, preds, average='micro', zero_division=0)
+        f1_macro = f1_score(labels, preds, average='macro', zero_division=0)
+        
+        # Precision et recall
+        prec_micro, rec_micro, _, _ = precision_recall_fscore_support(
+            labels, preds, average='micro', zero_division=0
+        )
+        prec_macro, rec_macro, _, _ = precision_recall_fscore_support(
+            labels, preds, average='macro', zero_division=0
+        )
+        
+        # Hamming loss (proportion d'étiquettes mal prédites)
+        h_loss = hamming_loss(labels, preds)
+        hamming_score = 1 - h_loss  # Plus intuitif : plus c'est haut, mieux c'est
+        
+        # Subset accuracy (toutes les étiquettes correctes)
+        subset_acc = np.mean(np.all(preds == labels, axis=1))
+        
+        return {
+            "f1_micro": f1_micro,
+            "f1_macro": f1_macro,
+            "precision_micro": prec_micro,
+            "precision_macro": prec_macro,
+            "recall_micro": rec_micro,
+            "recall_macro": rec_macro,
+            "hamming_score": hamming_score,
+            "hamming_loss": h_loss,
+            "subset_accuracy": subset_acc,
+            # Pour compatibilité
+            "accuracy": subset_acc,
+            "f1": f1_micro,
+            "precision": prec_micro,
+            "recall": rec_micro,
+        }
+
     # -------------------------------------------------------------------
-    # Training (adapté pour supporter l'incrémental + petits datasets + class balancing)
+    # Training (adapté pour supporter l'incrémental + petits datasets + class balancing + multi-label)
     # -------------------------------------------------------------------
     def train(self, ds: DatasetDict, args: argparse.Namespace, test_ds: Dataset = None):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -836,9 +1020,9 @@ tmp_eval/
         else:
             run_name = f"finbert-{self.task_type}-{ts}"  # 🎯 Inclure task_type
 
-        # ⚖️ NOUVEAU : Créer la fonction de loss pour class balancing
+        # ⚖️ NOUVEAU : Créer la fonction de loss pour class balancing (pas pour multi-label)
         custom_loss_fn = None
-        if self.class_balancing and len(ds["train"]) > 0:
+        if self.class_balancing and not self.is_multi_label and len(ds["train"]) > 0:
             train_labels = ds["train"]["labels"]
             custom_loss_fn = self.create_loss_function(train_labels)
             if custom_loss_fn:
@@ -858,8 +1042,13 @@ tmp_eval/
             batch_size = min(8, args.train_bs)  # Adapter la taille de batch
             patience = 2
 
-        # ⚖️ NOUVEAU : Utiliser F1 macro comme métrique principale si class balancing
-        primary_metric = "f1_macro" if self.class_balancing else "f1"
+        # 🌐 NOUVEAU : Métrique principale selon le type
+        if self.is_multi_label:
+            primary_metric = "f1_micro"
+        elif self.class_balancing:
+            primary_metric = "f1_macro"
+        else:
+            primary_metric = "f1"
 
         # 🔧 CORRECTIF 2 : Rediriger output_dir vers repo_dir si disponible
         output_dir = str(self.repo_dir) if self.repo_dir else args.output_dir
@@ -887,8 +1076,14 @@ tmp_eval/
             dataloader_drop_last=False,  # Ne pas ignorer les derniers échantillons
         )
 
-        # ⚖️ NOUVEAU : Utiliser CustomTrainer si loss personnalisée
-        if custom_loss_fn:
+        # 🌐 NOUVEAU : Déterminer la fonction de métriques
+        if self.is_multi_label:
+            compute_metrics_fn = self._metrics_multilabel
+        else:
+            compute_metrics_fn = self._metrics_balanced if len(ds["validation"]) > 0 else None
+
+        # 🌐 NOUVEAU : CustomTrainer avec support multi-label
+        if custom_loss_fn or self.is_multi_label:
             trainer = CustomTrainer(
                 loss_fn=custom_loss_fn,
                 model=self.model,
@@ -896,9 +1091,10 @@ tmp_eval/
                 train_dataset=ds["train"],
                 eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
                 tokenizer=self.tokenizer,
-                compute_metrics=self._metrics_balanced if len(ds["validation"]) > 0 else None,
+                compute_metrics=compute_metrics_fn,
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
             )
+            trainer.is_multi_label = self.is_multi_label  # 🌐 Passer l'info au trainer
         else:
             trainer = Trainer(
                 model=self.model,
@@ -906,7 +1102,7 @@ tmp_eval/
                 train_dataset=ds["train"],
                 eval_dataset=ds["validation"] if len(ds["validation"]) > 0 else None,
                 tokenizer=self.tokenizer,
-                compute_metrics=self._metrics_balanced if len(ds["validation"]) > 0 else None,
+                compute_metrics=compute_metrics_fn,
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
             )
 
@@ -926,7 +1122,7 @@ tmp_eval/
             logger.info(
                 "✅ Training complete — F1: %.4f | Acc: %.4f",
                 f1_score_val,
-                eval_res["eval_accuracy"],
+                eval_res.get("eval_accuracy", 0.0),
             )
         else:
             logger.info("✅ Training complete (no validation data)")
@@ -951,6 +1147,7 @@ tags:
 - sentiment-analysis
 - finbert
 - trading
+{"- multi-label" if self.is_multi_label else ""}
 pipeline_tag: text-classification
 ---
 
@@ -961,7 +1158,7 @@ Fine-tuned FinBERT model for financial {self.task_type} analysis in TradePulse.
 
 **Task**: {self.task_type.title()} Classification  
 **Target Column**: `{self.target_column}`  
-**Labels**: {list(self.LABEL_MAP.keys())}
+{"**Multi-Label**: Yes (" + str(self.num_labels) + " labels)" if self.is_multi_label else "**Labels**: " + str(list(self.LABEL_MAP.keys()) if self.LABEL_MAP else [])}
 
 ## Performance
 
@@ -971,9 +1168,11 @@ Fine-tuned FinBERT model for financial {self.task_type} analysis in TradePulse.
 | Metric | Value |
 |--------|-------|
 | Loss | {eval_res.get('eval_loss', 'n/a'):.4f} |
-| Accuracy | {acc:.4f} |
+{"| Accuracy | " + f"{acc:.4f} |" if not self.is_multi_label else "| Subset Accuracy | " + f"{eval_res.get('eval_subset_accuracy', 0):.4f} |"}
 | F1 Score | {eval_res.get('eval_f1', 0):.4f} |
+{"| F1 Micro | " + f"{eval_res.get('eval_f1_micro', 0):.4f} |" if self.is_multi_label else ""}
 | F1 Macro | {f1m:.4f} |
+{"| Hamming Score | " + f"{eval_res.get('eval_hamming_score', 0):.4f} |" if self.is_multi_label else ""}
 | Precision | {eval_res.get('eval_precision', 0):.4f} |
 | Recall | {eval_res.get('eval_recall', 0):.4f} |
 
@@ -985,11 +1184,13 @@ Fine-tuned FinBERT model for financial {self.task_type} analysis in TradePulse.
 - **Learning Rate**: {learning_rate}
 - **Batch Size**: {batch_size}
 - **Class Balancing**: {self.class_balancing or "None"}
+{"- **Problem Type**: Multi-Label Classification" if self.is_multi_label else ""}
 
 ## Usage
 
 ```python
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
 
 tokenizer = AutoTokenizer.from_pretrained("{self.hub_id}")
 model = AutoModelForSequenceClassification.from_pretrained("{self.hub_id}")
@@ -998,7 +1199,8 @@ model = AutoModelForSequenceClassification.from_pretrained("{self.hub_id}")
 text = "Apple reported strong quarterly earnings beating expectations"
 inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True)
 outputs = model(**inputs)
-predictions = outputs.logits.softmax(dim=-1)
+{"# Multi-label: apply sigmoid and threshold" if self.is_multi_label else ""}
+predictions = {"torch.sigmoid(outputs.logits).squeeze() > 0.5" if self.is_multi_label else "outputs.logits.softmax(dim=-1)"}
 ```
 
 ## Model Card Authors
@@ -1017,14 +1219,16 @@ predictions = outputs.logits.softmax(dim=-1)
             test_metrics = self.evaluate_on_test(test_ds)
             logger.info(f"📊 Métriques test: {test_metrics}")
 
-        # save a report (adapté pour mode incrémental + importance + class balancing)
+        # save a report (adapté pour mode incrémental + importance + class balancing + corrélations)
         report = {
             "model": self.model_name,
             "task_type": self.task_type,  # 🎯 NOUVEAU
             "hub_id": self.hub_id,        # 🎯 NOUVEAU
             "mode": "incremental" if self.incremental_mode else "classic",
             "target_column": self.target_column,  # 🎯 NOUVEAU
-            "label_mapping": dict(self.LABEL_MAP),  # 🎯 NOUVEAU
+            "is_multi_label": self.is_multi_label,  # 🌐 NOUVEAU
+            "num_labels": self.num_labels,  # 🌐 NOUVEAU
+            "label_mapping": dict(self.LABEL_MAP) if self.LABEL_MAP else {"multi_label": self.num_labels},  # 🎯 NOUVEAU
             "class_balancing": self.class_balancing,  # ⚖️ NOUVEAU
             "class_weights": self.class_weights.tolist() if self.class_weights is not None else None,  # ⚖️ NOUVEAU
             "epochs": epochs,
@@ -1053,11 +1257,11 @@ predictions = outputs.logits.softmax(dim=-1)
 
 
 # ---------------------------------------------------------------------------
-# CLI (adapté pour supporter l'incrémental + importance + class balancing)
+# CLI (adapté pour supporter l'incrémental + importance + class balancing + corrélations)
 # ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental, support importance et class balancing"
+        description="TradePulse FinBERT fine‑tuning utility avec apprentissage incrémental, support importance, corrélations et class balancing"
     )
     p.add_argument(
         "--dataset",
@@ -1089,9 +1293,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--hub_id", type=str, default=None, help="HF repo id (auto-détecté selon --target-column)"
     )
     
-    # 🎯 NOUVEAU argument pour la colonne cible
-    p.add_argument("--target-column", choices=["label", "importance"], default="label",
-                   help="Colonne à utiliser pour l'entraînement (label=sentiment, importance=importance)")
+    # 🎯 NOUVEAU argument pour la colonne cible (ajout corrélations)
+    p.add_argument("--target-column", choices=["label", "importance", "correlations"], default="label",
+                   help="Colonne à utiliser pour l'entraînement (label=sentiment, importance=importance, correlations=multi-label)")
     
     # ⚖️ NOUVEAU : Arguments pour class balancing
     p.add_argument("--class-balancing", choices=["weighted", "focal"], default=None,
@@ -1113,11 +1317,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# Entrée principale (adaptée pour supporter l'incrémental + importance + class balancing)
+# Entrée principale (adaptée pour supporter l'incrémental + importance + class balancing + corrélations)
 # ---------------------------------------------------------------------------
 def main():
     args = build_parser().parse_args()
     set_seed(args.seed)
+
+    # 🌐 NOUVEAU : Vérifier le support des corrélations
+    if args.target_column == "correlations" and not CORRELATION_SUPPORT:
+        logger.error("❌ Support des corrélations non disponible")
+        logger.info("💡 Assurez-vous que config/correlation_mapping.py existe")
+        return
 
     # Auto-sélection dataset (existant, conservé)
     if args.dataset is None and AUTOSEL:
@@ -1143,7 +1353,9 @@ def main():
 
     # 🎯 NOUVEAU : Gestion du baseline model automatique
     if args.incremental and getattr(args, 'baseline_model', None) is None:
-        task_type = "sentiment" if args.target_column == "label" else "importance"
+        task_type = "correlations" if args.target_column == "correlations" else (
+            "sentiment" if args.target_column == "label" else "importance"
+        )
         try:
             args.baseline_model = MODELS_CONFIG[task_type][args.mode]["hf_id"]
         except KeyError:
@@ -1181,6 +1393,8 @@ def main():
             logger.warning("⚠️ Pas de dataset de test pour évaluation baseline")
             # Métriques factices pour le test
             baseline_metrics = {"accuracy": 0.5, "f1": 0.5, "f1_macro": 0.5, "precision": 0.5, "recall": 0.5}
+            if tuner.is_multi_label:
+                baseline_metrics.update({"f1_micro": 0.5, "hamming_score": 0.5})
         
         # Entraînement incrémental
         test_metrics = tuner.train(ds, args, test_ds)
@@ -1206,7 +1420,11 @@ def main():
             if should_update:
                 # Mise à jour du modèle sur HuggingFace
                 if args.mode in ["production", "development"]:
-                    commit_msg = f"🔄 Incremental {args.target_column} | Acc: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
+                    # 🌐 NOUVEAU : Message de commit adapté pour multi-label
+                    if tuner.is_multi_label:
+                        commit_msg = f"🔄 Incremental {args.target_column} | F1µ: {test_metrics.get('f1_micro', 0):.3f}, Hamming: {test_metrics.get('hamming_score', 0):.3f}"
+                    else:
+                        commit_msg = f"🔄 Incremental {args.target_column} | Acc: {test_metrics['accuracy']:.3f}, F1: {test_metrics.get('f1_macro', test_metrics['f1']):.3f}"
                     
                     logger.info(f"🚀 Mise à jour du modèle {args.target_column}")
                     tuner.push_to_huggingface(commit_msg)
