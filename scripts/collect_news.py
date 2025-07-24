@@ -7,6 +7,7 @@ TradePulse News Collector - Smart Dual-Model ML Labeling
 Collecte avec double labellisation automatique:
 - Sentiment: positive/negative/neutral
 - Importance: critique/importante/générale
+- Correlations: détection des impacts sur commodités
 
 Usage:
     python scripts/collect_news.py --source fmp --count 60 --days 7 --auto-label
@@ -24,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 import requests
 import time
+import sys
 
 # Configuration des logs
 logging.basicConfig(
@@ -33,6 +35,23 @@ logger = logging.getLogger("smart-collector")
 
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
+
+# Import CommodityCorrelator
+try:
+    # Essayer d'importer depuis stock-analysis-platform
+    platform_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
+                                 "stock-analysis-platform", "scripts")
+    if os.path.exists(platform_path):
+        sys.path.append(platform_path)
+        from commodity_correlator import CommodityCorrelator
+        CORRELATOR_AVAILABLE = True
+        logger.info("✅ CommodityCorrelator importé avec succès")
+    else:
+        CORRELATOR_AVAILABLE = False
+        logger.warning("⚠️ CommodityCorrelator non disponible - chemin non trouvé")
+except ImportError as e:
+    CORRELATOR_AVAILABLE = False
+    logger.warning(f"⚠️ CommodityCorrelator non disponible: {e}")
 
 # 🎯 MODÈLES SPÉCIALISÉS PRODUITS PAR LE WORKFLOW
 ML_MODELS_CONFIG = {
@@ -87,7 +106,7 @@ FMP_LIMITS = {
 }
 
 class SmartNewsCollector:
-    """Collecteur avec double ML (sentiment + importance) - MODÈLES PRODUITS"""
+    """Collecteur avec double ML (sentiment + importance) + correlations - MODÈLES PRODUITS"""
     
     def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, 
                  auto_label: bool = False, ml_model: str = "production",
@@ -109,6 +128,11 @@ class SmartNewsCollector:
         self.confidence_threshold = confidence_threshold
         self.sentiment_classifier = None
         self.importance_classifier = None
+        
+        # Commodity Correlator
+        self.correlator = CommodityCorrelator() if CORRELATOR_AVAILABLE else None
+        if self.correlator:
+            logger.info("🔗 Détection des corrélations commodités activée")
         
         self._load_cache()
         
@@ -190,6 +214,41 @@ class SmartNewsCollector:
             logger.error(f"❌ Impossible de charger les modèles: {e}")
             self.sentiment_classifier = None
             self.importance_classifier = None
+
+    def _detect_correlations(self, text: str) -> List[str]:
+        """Détecte les corrélations pays:produit en utilisant commodity_correlator.py"""
+        if not self.correlator:
+            return []
+        
+        correlations = []
+        
+        try:
+            # Utiliser les mêmes filtres que commodity_correlator
+            if self.correlator._is_company_article(text):
+                return []
+            if not self.correlator._is_macro_article(text):
+                return []
+            
+            # Détecter les pays mentionnés
+            detected_countries = self.correlator.detect_countries_from_text(text)
+            
+            for country in detected_countries:
+                # Obtenir les exports du pays
+                country_exports = self.correlator.get_country_exports(country)
+                
+                for export in country_exports:
+                    # Filtrer comme dans commodity_correlator
+                    if export.get("impact") not in ("pivot", "major"):
+                        continue
+                    
+                    # Vérifier si le produit est mentionné
+                    if self.correlator._mentions_product(text, export["product_code"]):
+                        correlations.append(f"{country}:{export['product_code']}")
+            
+        except Exception as e:
+            logger.debug(f"Erreur détection corrélations: {e}")
+        
+        return correlations
 
     def _predict_dual_labels(self, text: str) -> Tuple[str, str, float, float]:
         """🎯 Prédit sentiment ET importance avec les modèles PRODUITS"""
@@ -405,7 +464,7 @@ class SmartNewsCollector:
         return all_articles[:count]
 
     def _enrich_article(self, article: Dict, source_type: str) -> Optional[Dict]:
-        """🎯 Enrichit un article avec double labellisation des MODÈLES PRODUITS"""
+        """🎯 Enrichit un article avec double labellisation + correlations"""
         try:
             title = article.get("title", "")
             content = article.get("text", "") or article.get("content", "")
@@ -452,6 +511,10 @@ class SmartNewsCollector:
                     "labeling_method": "rule_based_dual"
                 })
             
+            # 🔗 NOUVEAU: Détection des corrélations commodités
+            correlations = self._detect_correlations(enriched["text"])
+            enriched["correlations"] = correlations
+            
             # Score qualité global
             enriched["quality_score"] = self._calculate_quality_score(enriched)
             
@@ -485,32 +548,49 @@ class SmartNewsCollector:
         high_kw = sum(1 for kw in KEYWORD_TIERS["high"] if kw in text_lower)
         score += high_kw * 5
         
+        # 🔗 NOUVEAU: Bonus pour corrélations détectées
+        correlations = article.get("correlations", [])
+        score += len(correlations) * 3
+        
         return min(100, score)
 
     def save_dataset(self, articles: List[Dict], output_file: Optional[Path] = None) -> Path:
-        """🎯 Sauvegarde avec 3 colonnes: text, label, importance (MODÈLES PRODUITS)"""
+        """🎯 Sauvegarde avec 4 colonnes: text, label, importance, correlations"""
         if output_file is None:
             today = datetime.datetime.now(PARIS_TZ).strftime("%Y%m%d")
             output_file = self.output_dir / f"news_{today}.csv"
 
-        # Sauvegarde CSV avec 3 colonnes
+        # Sauvegarde CSV avec 4 colonnes
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["text", "label", "importance"])  # 3 colonnes
+            writer.writerow(["text", "label", "importance", "correlations"])  # 4 colonnes
             
             for article in articles:
+                # Joindre les corrélations avec des point-virgules
+                correlations_str = ";".join(article.get("correlations", []))
+                
                 writer.writerow([
                     article["text"], 
                     article["label"], 
-                    article["importance"]
+                    article["importance"],
+                    correlations_str
                 ])
 
-        # Métadonnées JSON
+        # Métadonnées JSON enrichies
         labels = [article["label"] for article in articles]
         importance_labels = [article["importance"] for article in articles]
         
         label_counts = {label: labels.count(label) for label in set(labels)}
         importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
+        
+        # Statistiques des corrélations
+        all_correlations = []
+        for article in articles:
+            all_correlations.extend(article.get("correlations", []))
+        
+        correlation_counts = {}
+        for corr in all_correlations:
+            correlation_counts[corr] = correlation_counts.get(corr, 0) + 1
         
         needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
         
@@ -521,6 +601,10 @@ class SmartNewsCollector:
             "article_count": len(articles),
             "label_distribution": label_counts,
             "importance_distribution": importance_counts,
+            "correlation_distribution": dict(sorted(correlation_counts.items(), key=lambda x: x[1], reverse=True)[:20]),
+            "total_correlations": len(all_correlations),
+            "unique_correlations": len(set(all_correlations)),
+            "correlator_enabled": CORRELATOR_AVAILABLE,
             "deduplication_enabled": self.enable_cache,
             "cache_size": len(self.seen_articles),
             "dual_ml_enabled": self.auto_label,
@@ -529,7 +613,7 @@ class SmartNewsCollector:
             "confidence_threshold": self.confidence_threshold if self.auto_label else None,
             "high_confidence_articles": len(articles) - needs_review_count,
             "needs_review_articles": needs_review_count,
-            "models_source": "workflow_produit"  # Indique que les modèles viennent du workflow
+            "models_source": "workflow_produit"
         }
 
         json_file = output_file.with_suffix('.json')
@@ -540,16 +624,20 @@ class SmartNewsCollector:
         self._save_cache()
 
         logger.info(f"✅ Dataset Smart PRODUIT: {output_file} ({len(articles)} échantillons)")
+        logger.info(f"🔗 Corrélations détectées: {len(all_correlations)} total, {len(set(all_correlations))} uniques")
         return output_file
 
     def collect_and_save(self, count: int = 40, days: int = 7, output_file: Optional[Path] = None) -> Path:
-        """🎯 Pipeline complet avec MODÈLES PRODUITS (sentiment + importance)"""
+        """🎯 Pipeline complet avec MODÈLES PRODUITS + corrélations"""
         logger.info(f"🚀 Collecte Smart PRODUIT: {count} articles, {days} jours")
         
         if self.auto_label:
             logger.info(f"🎯 Double ML PRODUIT activé: sentiment + importance")
             logger.info(f"😊 Modèle sentiment: {ML_MODELS_CONFIG['sentiment']}")
             logger.info(f"🎯 Modèle importance: {ML_MODELS_CONFIG['importance']}")
+        
+        if CORRELATOR_AVAILABLE:
+            logger.info(f"🔗 Détection des corrélations commodités activée")
 
         # Collecte
         articles = self.collect_fmp_news(count, days)
@@ -564,8 +652,17 @@ class SmartNewsCollector:
         label_counts = {label: labels.count(label) for label in set(labels)}
         importance_counts = {label: importance_labels.count(label) for label in set(importance_labels)}
         
+        # Statistiques corrélations
+        correlation_stats = {}
+        for article in articles:
+            for corr in article.get("correlations", []):
+                correlation_stats[corr] = correlation_stats.get(corr, 0) + 1
+        
         logger.info(f"📊 Distribution sentiment: {label_counts}")
         logger.info(f"🎯 Distribution importance: {importance_counts}")
+        if correlation_stats:
+            top_correlations = sorted(correlation_stats.items(), key=lambda x: x[1], reverse=True)[:5]
+            logger.info(f"🔗 Top 5 corrélations: {top_correlations}")
         logger.info(f"🗄️ Cache: {len(self.seen_articles)} articles connus")
         
         if self.auto_label:
@@ -577,7 +674,7 @@ class SmartNewsCollector:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Smart News Collector with PRODUCTION Dual ML Models")
+    parser = argparse.ArgumentParser(description="Smart News Collector with ML + Correlations")
     
     parser.add_argument("--source", choices=["fmp"], default="fmp", help="Source FMP")
     parser.add_argument("--count", type=int, default=40, help="Nombre d'articles")
@@ -616,12 +713,15 @@ def main():
         )
 
         print(f"✅ Dataset Smart PRODUIT généré: {output_file}")
-        print(f"🎯 Colonnes: text, label (sentiment), importance")
+        print(f"🎯 Colonnes: text, label (sentiment), importance, correlations")
         
         if args.auto_label:
             print(f"🤖 Double ML PRODUIT:")
             print(f"  😊 Sentiment: {ML_MODELS_CONFIG['sentiment']}")
             print(f"  🎯 Importance: {ML_MODELS_CONFIG['importance']}")
+        
+        if CORRELATOR_AVAILABLE:
+            print(f"🔗 Corrélations commodités détectées")
         
         print("\n🚀 Prochaines étapes:")
         print(f"  1. Éditer: open news_editor.html")
