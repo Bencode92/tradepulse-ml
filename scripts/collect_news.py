@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-TradePulse News Collector - Smart Dual-Model ML Labeling
-========================================================
+TradePulse News Collector - Smart Triple-Model ML Labeling
+==========================================================
 
-Collecte avec double labellisation automatique:
+Collecte avec triple labellisation automatique:
 - Sentiment: positive/negative/neutral
 - Importance: critique/importante/générale
-- Correlations: détection des impacts sur commodités
+- Correlations: détection ML des impacts sur commodités
 
 Usage:
     python scripts/collect_news.py --source fmp --count 60 --days 7 --auto-label
@@ -56,7 +56,8 @@ except ImportError as e:
 # 🎯 MODÈLES SPÉCIALISÉS PRODUITS PAR LE WORKFLOW
 ML_MODELS_CONFIG = {
     "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # ✅ Modèle sentiment entraîné
-    "importance": "Bencode92/tradepulse-finbert-importance",  # ✅ Modèle importance entraîné  
+    "importance": "Bencode92/tradepulse-finbert-importance",  # ✅ Modèle importance entraîné
+    "correlation": "Bencode92/tradepulse-correlation",        # ✅ Modèle corrélation ML
     "production": "Bencode92/tradepulse-finbert-sentiment",   # Alias pour compatibilité
     "fallback": "yiyanghkust/finbert-tone",                   # Fallback de base
 }
@@ -106,7 +107,7 @@ FMP_LIMITS = {
 }
 
 class SmartNewsCollector:
-    """Collecteur avec double ML (sentiment + importance) + correlations - MODÈLES PRODUITS"""
+    """Collecteur avec triple ML (sentiment + importance + correlations) - MODÈLES PRODUITS"""
     
     def __init__(self, output_dir: str = "datasets", enable_cache: bool = True, 
                  auto_label: bool = False, ml_model: str = "production",
@@ -128,11 +129,12 @@ class SmartNewsCollector:
         self.confidence_threshold = confidence_threshold
         self.sentiment_classifier = None
         self.importance_classifier = None
+        self.correlation_classifier = None  # Nouveau modèle ML
         
-        # Commodity Correlator
+        # Commodity Correlator (fallback)
         self.correlator = CommodityCorrelator() if CORRELATOR_AVAILABLE else None
         if self.correlator:
-            logger.info("🔗 Détection des corrélations commodités activée")
+            logger.info("🔗 Détection des corrélations commodités activée (règles)")
         
         self._load_cache()
         
@@ -166,7 +168,7 @@ class SmartNewsCollector:
             logger.warning(f"Erreur sauvegarde cache: {e}")
 
     def _load_ml_models(self):
-        """🎯 Charge les 2 modèles spécialisés PRODUITS par le workflow"""
+        """🎯 Charge les 3 modèles spécialisés PRODUITS par le workflow"""
         try:
             from transformers import pipeline
             import torch
@@ -209,49 +211,105 @@ class SmartNewsCollector:
             except Exception as e:
                 logger.warning(f"⚠️ Pas de modèle importance, utilisation règles: {e}")
                 self.importance_classifier = None
+            
+            # 3. Modèle corrélation ML (NOUVEAU)
+            try:
+                logger.info(f"🔗 Chargement modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
+                self.correlation_classifier = pipeline(
+                    "text-classification",
+                    model=ML_MODELS_CONFIG["correlation"],
+                    device=device,
+                    top_k=None,  # Retourner tous les scores
+                    **model_kwargs
+                )
+                logger.info("✅ Modèle corrélation ML chargé")
+                
+                # Charger le mapping des commodités
+                try:
+                    from config.correlation_mapping import COMMODITY_CODES
+                    self.commodity_codes = COMMODITY_CODES
+                    logger.info(f"📊 {len(COMMODITY_CODES)} codes de commodités chargés")
+                except ImportError:
+                    logger.warning("⚠️ correlation_mapping.py non trouvé")
+                    self.commodity_codes = []
+                    self.correlation_classifier = None
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Pas de modèle corrélation ML: {e}")
+                self.correlation_classifier = None
                 
         except Exception as e:
             logger.error(f"❌ Impossible de charger les modèles: {e}")
             self.sentiment_classifier = None
             self.importance_classifier = None
+            self.correlation_classifier = None
 
-    def _detect_correlations(self, text: str) -> List[str]:
-        """Détecte les corrélations pays:produit en utilisant commodity_correlator.py"""
-        if not self.correlator:
+    def _predict_correlations_ml(self, text: str) -> List[str]:
+        """🔗 Prédit les corrélations avec le modèle ML"""
+        if not self.correlation_classifier or not self.commodity_codes:
             return []
         
-        correlations = []
-        
         try:
-            # Utiliser les mêmes filtres que commodity_correlator
-            if self.correlator._is_company_article(text):
-                return []
-            if not self.correlator._is_macro_article(text):
-                return []
+            # Tronquer le texte si nécessaire
+            text_truncated = text[:512]
             
-            # Détecter les pays mentionnés
-            detected_countries = self.correlator.detect_countries_from_text(text)
+            # Prédiction multi-label
+            predictions = self.correlation_classifier(text_truncated)
             
-            for country in detected_countries:
-                # Obtenir les exports du pays
-                country_exports = self.correlator.get_country_exports(country)
-                
-                for export in country_exports:
-                    # Filtrer comme dans commodity_correlator
-                    if export.get("impact") not in ("pivot", "major"):
-                        continue
-                    
-                    # Vérifier si le produit est mentionné
-                    if self.correlator._mentions_product(text, export["product_code"]):
-                        correlations.append(f"{country}:{export['product_code']}")
+            # Extraire les corrélations avec score > 0.5
+            correlations = []
+            for i, pred in enumerate(predictions):
+                if pred['score'] > 0.5 and i < len(self.commodity_codes):
+                    correlations.append(self.commodity_codes[i])
+            
+            return correlations
             
         except Exception as e:
-            logger.debug(f"Erreur détection corrélations: {e}")
+            logger.warning(f"⚠️ Erreur prédiction corrélations ML: {e}")
+            return []
+
+    def _detect_correlations(self, text: str) -> List[str]:
+        """Détecte les corrélations - ML d'abord, puis fallback CommodityCorrelator"""
+        correlations = []
+        
+        # 1. Essayer d'abord avec le modèle ML
+        if self.correlation_classifier:
+            correlations = self._predict_correlations_ml(text)
+            if correlations:
+                return correlations
+        
+        # 2. Fallback sur CommodityCorrelator si disponible
+        if not correlations and self.correlator:
+            try:
+                # Utiliser les mêmes filtres que commodity_correlator
+                if self.correlator._is_company_article(text):
+                    return []
+                if not self.correlator._is_macro_article(text):
+                    return []
+                
+                # Détecter les pays mentionnés
+                detected_countries = self.correlator.detect_countries_from_text(text)
+                
+                for country in detected_countries:
+                    # Obtenir les exports du pays
+                    country_exports = self.correlator.get_country_exports(country)
+                    
+                    for export in country_exports:
+                        # Filtrer comme dans commodity_correlator
+                        if export.get("impact") not in ("pivot", "major"):
+                            continue
+                        
+                        # Vérifier si le produit est mentionné
+                        if self.correlator._mentions_product(text, export["product_code"]):
+                            correlations.append(f"{country}:{export['product_code']}")
+                
+            except Exception as e:
+                logger.debug(f"Erreur détection corrélations règles: {e}")
         
         return correlations
 
-    def _predict_dual_labels(self, text: str) -> Tuple[str, str, float, float]:
-        """🎯 Prédit sentiment ET importance avec les modèles PRODUITS"""
+    def _predict_triple_labels(self, text: str) -> Tuple[str, str, List[str], float, float]:
+        """🎯 Prédit sentiment, importance ET corrélations avec les modèles PRODUITS"""
         text_truncated = text[:512]
         
         # 1. Prédiction sentiment avec modèle PRODUIT
@@ -303,7 +361,10 @@ class SmartNewsCollector:
         else:
             importance_label = self._basic_importance_analysis(text)
         
-        return sentiment_label, importance_label, sentiment_confidence, importance_confidence
+        # 3. Prédiction corrélations (ML ou règles)
+        correlations = self._detect_correlations(text)
+        
+        return sentiment_label, importance_label, correlations, sentiment_confidence, importance_confidence
 
     def _basic_sentiment_analysis(self, text: str) -> str:
         """Analyse de sentiment basique (fallback)"""
@@ -464,7 +525,7 @@ class SmartNewsCollector:
         return all_articles[:count]
 
     def _enrich_article(self, article: Dict, source_type: str) -> Optional[Dict]:
-        """🎯 Enrichit un article avec double labellisation + correlations"""
+        """🎯 Enrichit un article avec triple labellisation + correlations"""
         try:
             title = article.get("title", "")
             content = article.get("text", "") or article.get("content", "")
@@ -484,36 +545,36 @@ class SmartNewsCollector:
                 "source_type": source_type
             }
             
-            # 🎯 Double prédiction avec MODÈLES PRODUITS
+            # 🎯 Triple prédiction avec MODÈLES PRODUITS
             if self.auto_label:
-                sentiment_label, importance_label, sent_conf, imp_conf = self._predict_dual_labels(enriched["text"])
+                sentiment_label, importance_label, correlations, sent_conf, imp_conf = self._predict_triple_labels(enriched["text"])
                 
                 enriched.update({
                     "label": sentiment_label,
                     "importance": importance_label,
+                    "correlations": correlations,
                     "sentiment_confidence": sent_conf,
                     "importance_confidence": imp_conf,
                     "needs_review": sent_conf < self.confidence_threshold or imp_conf < self.confidence_threshold,
                     "sentiment_model": ML_MODELS_CONFIG["sentiment"] if self.sentiment_classifier else "rule_based",
                     "importance_model": ML_MODELS_CONFIG["importance"] if self.importance_classifier else "rule_based",
-                    "labeling_method": "dual_ml_produit"
+                    "correlation_model": ML_MODELS_CONFIG["correlation"] if self.correlation_classifier else "commodity_correlator",
+                    "labeling_method": "triple_ml_produit"
                 })
             else:
                 sentiment_label = self._basic_sentiment_analysis(enriched["text"])
                 importance_label = self._basic_importance_analysis(enriched["text"])
+                correlations = self._detect_correlations(enriched["text"])
                 
                 enriched.update({
                     "label": sentiment_label,
                     "importance": importance_label,
+                    "correlations": correlations,
                     "sentiment_confidence": None,
                     "importance_confidence": None,
                     "needs_review": False,
-                    "labeling_method": "rule_based_dual"
+                    "labeling_method": "rule_based_triple"
                 })
-            
-            # 🔗 NOUVEAU: Détection des corrélations commodités
-            correlations = self._detect_correlations(enriched["text"])
-            enriched["correlations"] = correlations
             
             # Score qualité global
             enriched["quality_score"] = self._calculate_quality_score(enriched)
@@ -566,8 +627,8 @@ class SmartNewsCollector:
             writer.writerow(["text", "label", "importance", "correlations"])  # 4 colonnes
             
             for article in articles:
-                # Joindre les corrélations avec des point-virgules
-                correlations_str = ";".join(article.get("correlations", []))
+                # Joindre les corrélations avec des virgules
+                correlations_str = ",".join(article.get("correlations", []))
                 
                 writer.writerow([
                     article["text"], 
@@ -597,7 +658,7 @@ class SmartNewsCollector:
         metadata = {
             "filename": output_file.name,
             "created_at": datetime.datetime.now(PARIS_TZ).isoformat(),
-            "source": "fmp_smart_produit",
+            "source": "fmp_smart_triple_ml",
             "article_count": len(articles),
             "label_distribution": label_counts,
             "importance_distribution": importance_counts,
@@ -605,15 +666,17 @@ class SmartNewsCollector:
             "total_correlations": len(all_correlations),
             "unique_correlations": len(set(all_correlations)),
             "correlator_enabled": CORRELATOR_AVAILABLE,
+            "ml_correlation_enabled": self.correlation_classifier is not None,
             "deduplication_enabled": self.enable_cache,
             "cache_size": len(self.seen_articles),
-            "dual_ml_enabled": self.auto_label,
+            "triple_ml_enabled": self.auto_label,
             "sentiment_model": ML_MODELS_CONFIG["sentiment"] if self.auto_label else None,
             "importance_model": ML_MODELS_CONFIG["importance"] if self.auto_label else None,
+            "correlation_model": ML_MODELS_CONFIG["correlation"] if self.correlation_classifier else None,
             "confidence_threshold": self.confidence_threshold if self.auto_label else None,
             "high_confidence_articles": len(articles) - needs_review_count,
             "needs_review_articles": needs_review_count,
-            "models_source": "workflow_produit"
+            "models_source": "workflow_produit_triple"
         }
 
         json_file = output_file.with_suffix('.json')
@@ -632,12 +695,14 @@ class SmartNewsCollector:
         logger.info(f"🚀 Collecte Smart PRODUIT: {count} articles, {days} jours")
         
         if self.auto_label:
-            logger.info(f"🎯 Double ML PRODUIT activé: sentiment + importance")
+            logger.info(f"🎯 Triple ML PRODUIT activé: sentiment + importance + corrélations")
             logger.info(f"😊 Modèle sentiment: {ML_MODELS_CONFIG['sentiment']}")
             logger.info(f"🎯 Modèle importance: {ML_MODELS_CONFIG['importance']}")
+            if self.correlation_classifier:
+                logger.info(f"🔗 Modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
         
-        if CORRELATOR_AVAILABLE:
-            logger.info(f"🔗 Détection des corrélations commodités activée")
+        if CORRELATOR_AVAILABLE and not self.correlation_classifier:
+            logger.info(f"🔗 Détection des corrélations commodités par règles (fallback)")
 
         # Collecte
         articles = self.collect_fmp_news(count, days)
@@ -674,7 +739,7 @@ class SmartNewsCollector:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Smart News Collector with ML + Correlations")
+    parser = argparse.ArgumentParser(description="Smart News Collector with Triple ML")
     
     parser.add_argument("--source", choices=["fmp"], default="fmp", help="Source FMP")
     parser.add_argument("--count", type=int, default=40, help="Nombre d'articles")
@@ -684,7 +749,7 @@ def main():
     parser.add_argument("--no-cache", action="store_true", help="Désactiver déduplication")
     
     # Arguments ML
-    parser.add_argument("--auto-label", action="store_true", help="Activer double ML labeling PRODUIT")
+    parser.add_argument("--auto-label", action="store_true", help="Activer triple ML labeling PRODUIT")
     parser.add_argument("--ml-model", choices=["production", "sentiment", "importance", "fallback"], 
                        default="production", help="Modèle ML (compatibilité)")
     parser.add_argument("--confidence-threshold", type=float, default=0.75, 
@@ -716,12 +781,10 @@ def main():
         print(f"🎯 Colonnes: text, label (sentiment), importance, correlations")
         
         if args.auto_label:
-            print(f"🤖 Double ML PRODUIT:")
+            print(f"🤖 Triple ML PRODUIT:")
             print(f"  😊 Sentiment: {ML_MODELS_CONFIG['sentiment']}")
             print(f"  🎯 Importance: {ML_MODELS_CONFIG['importance']}")
-        
-        if CORRELATOR_AVAILABLE:
-            print(f"🔗 Corrélations commodités détectées")
+            print(f"  🔗 Corrélations: {ML_MODELS_CONFIG['correlation']} (ML) ou règles")
         
         print("\n🚀 Prochaines étapes:")
         print(f"  1. Éditer: open news_editor.html")
