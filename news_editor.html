@@ -75,8 +75,8 @@
         <span id="status" class="text-sm text-gray-300 ml-auto flex items-center"></span>
       </div>
 
-      <!-- Statistiques AVEC ACCENTS FIXES -->
-      <div id="statsPanel" class="hidden grid md:grid-cols-7 gap-4">
+      <!-- Statistiques AVEC CORRÉLATIONS -->
+      <div id="statsPanel" class="hidden grid md:grid-cols-8 gap-4">
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-blue-400" id="totalRows">0</div>
           <div class="text-sm text-gray-300">Total lignes</div>
@@ -94,7 +94,7 @@
           <div class="text-2xl font-bold text-gray-400" id="neutralCount">0</div>
           <div class="text-sm text-gray-300">Neutres</div>
         </div>
-        <!-- Stats importance FIXES -->
+        <!-- Stats importance -->
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-red-400" id="critiqueCount">0</div>
           <div class="text-sm text-gray-300">Critiques</div>
@@ -106,6 +106,11 @@
         <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
           <div class="text-2xl font-bold text-green-400" id="généraleCount">0</div>
           <div class="text-sm text-gray-300">Générales</div>
+        </div>
+        <!-- Stats corrélations -->
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-4 border border-white/20">
+          <div class="text-2xl font-bold text-purple-400" id="correlationCount">0</div>
+          <div class="text-sm text-gray-300">Corrélations</div>
         </div>
       </div>
 
@@ -168,7 +173,7 @@
         return mapping[normalized] || 'neutral';
       }
 
-      // 🔧 DEBUG avec normalisation
+      // 🔧 DEBUG avec normalisation et corrélations
       function updateDebugInfo() {
         const debug = document.getElementById('debugInfo');
         if (!rows.length) {
@@ -177,8 +182,10 @@
         }
 
         const hasImportance = headers.includes('importance');
+        const hasCorrelations = headers.includes('correlations');
         const sentimentDist = {};
         const importanceDist = {};
+        let totalCorrelations = 0;
         
         rows.forEach(row => {
           const label = normalizeSentiment(row.label);
@@ -188,11 +195,18 @@
           if (hasImportance) {
             importanceDist[importance] = (importanceDist[importance] || 0) + 1;
           }
+          if (hasCorrelations && row.correlations) {
+            const corrs = row.correlations.split(';').filter(c => c.trim());
+            totalCorrelations += corrs.length;
+          }
         });
 
         let text = `📊 ${rows.length} lignes | Sentiment: ${JSON.stringify(sentimentDist)}`;
         if (hasImportance) {
           text += ` | Importance: ${JSON.stringify(importanceDist)}`;
+        }
+        if (hasCorrelations) {
+          text += ` | ${totalCorrelations} corrélations`;
         }
         debug.textContent = text;
       }
@@ -222,14 +236,16 @@
       let currentFilename = '';
       let currentSha = null;
 
-      // 🔧 VALIDATION avec normalisation
+      // 🔧 VALIDATION avec normalisation et corrélations
       function validateDataset() {
         const issues = [];
         const stats = { positive: 0, negative: 0, neutral: 0, invalid_sentiment: 0 };
         const importanceStats = { critique: 0, importante: 0, générale: 0, invalid_importance: 0 };
+        const correlationStats = { total: 0, unique: new Set(), byCountry: {} };
         
         const requiredHeaders = ['text', 'label'];
         const hasImportance = headers.includes('importance');
+        const hasCorrelations = headers.includes('correlations');
         
         if (hasImportance) requiredHeaders.push('importance');
         
@@ -265,6 +281,19 @@
               issues.push(`❌ Ligne ${idx + 1}: importance "${row.importance}" invalide`);
             }
           }
+          
+          // Corrélations
+          if (hasCorrelations && row.correlations) {
+            const corrs = row.correlations.split(';').filter(c => c.trim());
+            correlationStats.total += corrs.length;
+            corrs.forEach(corr => {
+              correlationStats.unique.add(corr);
+              const [country] = corr.split(':');
+              if (country) {
+                correlationStats.byCountry[country] = (correlationStats.byCountry[country] || 0) + 1;
+              }
+            });
+          }
         });
         
         // Affichage
@@ -287,6 +316,13 @@
           if (importanceStats.invalid_importance > 0) html += `<li class="text-red-400">• Invalides: ${importanceStats.invalid_importance}</li>`;
         }
         
+        if (hasCorrelations) {
+          html += `<li><strong>Corrélations:</strong></li>`;
+          html += `<li>• Total: ${correlationStats.total}</li>`;
+          html += `<li>• Uniques: ${correlationStats.unique.size}</li>`;
+          html += `<li>• Top pays: ${Object.entries(correlationStats.byCountry).sort((a,b) => b[1] - a[1]).slice(0,3).map(([c,n]) => `${c}(${n})`).join(', ')}</li>`;
+        }
+        
         html += `</ul></div>`;
         
         html += `<div>`;
@@ -304,12 +340,13 @@
         return issues.length === 0;
       }
 
-      // 🔧 STATS avec normalisation
+      // 🔧 STATS avec normalisation et corrélations
       function updateStats() {
         if (!rows.length) return;
         
         const sentimentStats = { positive: 0, negative: 0, neutral: 0 };
         const importanceStats = { critique: 0, importante: 0, générale: 0 };
+        let totalCorrelations = 0;
         
         rows.forEach(row => {
           const label = normalizeSentiment(row.label);
@@ -317,6 +354,11 @@
           
           if (sentimentStats.hasOwnProperty(label)) sentimentStats[label]++;
           if (importanceStats.hasOwnProperty(importance)) importanceStats[importance]++;
+          
+          if (row.correlations) {
+            const corrs = row.correlations.split(';').filter(c => c.trim());
+            totalCorrelations += corrs.length;
+          }
         });
         
         qs('totalRows').textContent = rows.length;
@@ -328,11 +370,13 @@
         qs('importanteCount').textContent = importanceStats.importante;
         qs('généraleCount').textContent = importanceStats.générale;
         
+        qs('correlationCount').textContent = totalCorrelations;
+        
         statsPanel.classList.remove('hidden');
         updateDebugInfo();
       }
 
-      // 🔧 RENDU avec normalisation
+      // 🔧 RENDU avec normalisation et corrélations
       function renderTable() {
         if (!headers.length) return;
 
@@ -379,6 +423,23 @@
                     <option value="générale" ${val==='générale'?'selected':''}>générale</option>
                   </select>
                 </td>`;
+            } else if (h === 'correlations') {
+              const corrs = (row.correlations || '').split(';').filter(c => c.trim());
+              html += `
+                <td class="px-4 py-3">
+                  <div class="flex flex-wrap gap-1 items-center">
+                    ${corrs.map(corr => {
+                      const [country, product] = corr.split(':');
+                      return `<span class="px-2 py-1 text-xs bg-purple-500/20 text-purple-300 rounded border border-purple-500/30">${country}:${product || '?'}</span>`;
+                    }).join('')}
+                    <input type="text" 
+                           data-row="${rIdx}" 
+                           data-col="correlations"
+                           placeholder="US:CORN;CN:SOYBEAN"
+                           value="${row.correlations || ''}"
+                           class="ml-2 px-2 py-1 bg-transparent text-xs text-gray-300 border-b border-gray-600 focus:border-purple-400 focus:outline-none" />
+                  </div>
+                </td>`;
             } else {
               html += `
                 <td contenteditable="true"
@@ -400,7 +461,7 @@
         html += `</tbody></table>`;
         tableWrapper.innerHTML = html;
 
-        // 🔧 LISTENERS avec normalisation
+        // 🔧 LISTENERS avec normalisation et corrélations
         tableWrapper.querySelectorAll('td[contenteditable=true]').forEach(cell => {
           cell.addEventListener('input', () => {
             const r = +cell.dataset.row, c = cell.dataset.col;
@@ -446,6 +507,16 @@
           });
         });
 
+        // Listener pour les corrélations
+        tableWrapper.querySelectorAll('input[data-col="correlations"]').forEach(input => {
+          input.addEventListener('input', () => {
+            const r = +input.dataset.row;
+            rows[r].correlations = input.value.trim();
+            updateStats();
+            statusSpan.textContent = `Ligne ${r + 1}: corrélations modifiées`;
+          });
+        });
+
         updateStats();
       }
 
@@ -488,6 +559,10 @@
               } else {
                 row.label = normalizeSentiment(row.label);
               }
+              // Assurer que correlations existe
+              if (!row.correlations && headers.includes('correlations')) {
+                row.correlations = '';
+              }
               return row;
             });
             
@@ -510,6 +585,7 @@
         headers.forEach(h => {
           if (h === 'label') obj[h] = 'neutral';
           else if (h === 'importance') obj[h] = 'générale';
+          else if (h === 'correlations') obj[h] = '';
           else obj[h] = '';
         }); 
         rows.push(obj);
@@ -595,6 +671,9 @@
             } else {
               row.label = normalizeSentiment(row.label);
             }
+            if (!row.correlations && headers.includes('correlations')) {
+              row.correlations = '';
+            }
             return row;
           });
           
@@ -658,7 +737,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 HTML ACCENT-SAFE chargé');
+        console.log('🔧 HTML avec corrélations chargé');
       });
     </script>
   </body>
