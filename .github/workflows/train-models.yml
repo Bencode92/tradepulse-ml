@@ -1,0 +1,59 @@
+name: Train Models
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Dataset Workflow"]
+    types:
+      - completed
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+jobs:
+  train-models:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install -r requirements-ml.txt
+    
+    - name: Fix os.chdir issue
+      run: |
+        # Commenter la ligne os.chdir dans finetune.py
+        sed -i 's/os\.chdir(self\.repo_dir)/#os.chdir(self.repo_dir)  # FIX: Ne pas changer de répertoire/' scripts/finetune.py || true
+    
+    - name: Train sentiment model
+      run: |
+        python scripts/finetune.py \
+          --dataset datasets/news_20250724.csv \
+          --output_dir models/finbert-sentiment \
+          --target-column label \
+          --epochs 3 --mode production --incremental --push
+    
+    - name: Train importance model
+      run: |
+        python scripts/finetune.py \
+          --dataset datasets/news_20250724.csv \
+          --output_dir models/finbert-importance \
+          --target-column importance \
+          --epochs 3 --mode production --incremental --push
+    
+    - name: Train correlations model
+      run: |
+        python scripts/finetune.py \
+          --dataset datasets/news_20250724.csv \
+          --output_dir models/finbert-correlations \
+          --target-column correlations \
+          --epochs 3 --mode production --incremental --push
