@@ -171,12 +171,12 @@ jobs:
         
         echo "🔧 Applying ignore_mismatched_sizes fix for multi-label models..."
         
-        # Fix pour le mode incrémental
-        sed -i '/problem_type="multi_label_classification"/{
-          a\                        ignore_mismatched_sizes=True,
-        }' scripts/finetune.py
+        # FIX: Remplacer problem_type="multi_label_classification" par la version avec ignore_mismatched_sizes
+        sed -i 's/problem_type="multi_label_classification"/problem_type="multi_label_classification",\n                        ignore_mismatched_sizes=True/g' scripts/finetune.py
         
         echo "✅ Multi-label dimensions fix applied!"
+        echo "Vérification:"
+        grep -A2 -B2 'problem_type="multi_label_classification"' scripts/finetune.py | head -20
 
     - name: 🔧 Smart Configuration
       id: config
