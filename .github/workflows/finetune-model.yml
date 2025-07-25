@@ -144,7 +144,6 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       PYTHONPATH: ${{ github.workspace }}
-      TOKENIZERS_PARALLELISM: "false"
     
     outputs:
       models-trained: ${{ steps.training.outputs.models-trained }}
@@ -166,72 +165,18 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
-    - name: 🔧 Apply ALL Fixes Inline
+    - name: 🔧 Apply Multi-Label Dimensions Fix
       run: |
         set -euo pipefail
         
-        echo "🔧 Applying all fixes directly in finetune.py..."
+        echo "🔧 Applying ignore_mismatched_sizes fix for multi-label models..."
         
-        # Create a patch file with all fixes
-        cat > finetune_patch.py << 'EOF'
-        # Insert after imports section
+        # FIX: Remplacer problem_type="multi_label_classification" par la version avec ignore_mismatched_sizes
+        sed -i 's/problem_type="multi_label_classification"/problem_type="multi_label_classification",\n                        ignore_mismatched_sizes=True/g' scripts/finetune.py
         
-        # MultiLabelCollator inline
-        class MultiLabelCollator(DataCollatorWithPadding):
-            """Data collator that ensures labels are float32 for multi-label classification"""
-            def __call__(self, features):
-                batch = super().__call__(features)
-                if "labels" in batch:
-                    batch["labels"] = batch["labels"].to(torch.float32)
-                return batch
-        EOF
-        
-        # Apply fixes to finetune.py
-        python3 << 'PYTHON_SCRIPT'
-        import re
-        
-        # Read finetune.py
-        with open('scripts/finetune.py', 'r') as f:
-            content = f.read()
-        
-        # Fix 1: Add ignore_mismatched_sizes
-        content = content.replace(
-            'problem_type="multi_label_classification"',
-            'problem_type="multi_label_classification",\n                        ignore_mismatched_sizes=True'
-        )
-        
-        # Fix 2: Add MultiLabelCollator class after imports
-        import_section_end = content.find('# ---------------------------------------------------------------------------')
-        if import_section_end > 0:
-            # Read patch content
-            with open('finetune_patch.py', 'r') as f:
-                patch = f.read()
-            # Insert before first separator
-            content = content[:import_section_end] + '\n' + patch + '\n' + content[import_section_end:]
-        
-        # Fix 3: Use MultiLabelCollator in CustomTrainer
-        content = re.sub(
-            r'(trainer = CustomTrainer\([^)]+)\)',
-            lambda m: m.group(1) + ',\n                data_collator=MultiLabelCollator(self.tokenizer) if self.is_multi_label else None)',
-            content
-        )
-        
-        # Fix 4: Use MultiLabelCollator in regular Trainer
-        content = re.sub(
-            r'(trainer = Trainer\([^)]+)(\n\s+\))',
-            lambda m: m.group(1) + ',\n                data_collator=MultiLabelCollator(self.tokenizer) if hasattr(self, "is_multi_label") and self.is_multi_label else None' + m.group(2),
-            content
-        )
-        
-        # Write back
-        with open('scripts/finetune.py', 'w') as f:
-            f.write(content)
-        
-        print("✅ All fixes applied!")
-        PYTHON_SCRIPT
-        
-        # Cleanup
-        rm -f finetune_patch.py
+        echo "✅ Multi-label dimensions fix applied!"
+        echo "Vérification:"
+        grep -A2 -B2 'problem_type="multi_label_classification"' scripts/finetune.py | head -20
 
     - name: 🔧 Smart Configuration
       id: config
@@ -448,12 +393,12 @@ jobs:
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-    - name: 🤖 Train Multi-Model Strategy (COMPLETE FIX)
+    - name: 🤖 Train Multi-Model Strategy (FULL FIX)
       id: training
       run: |
         set -euo pipefail
         
-        echo "🚀 Auto-Training Mode - COMPLETE FIX Applied!"
+        echo "🚀 Auto-Training Mode - ALL FIXES Applied!"
         echo "📋 Strategy: $TRAINING_STRATEGY"
         echo "🎯 Training Mode: $TRAINING_MODE"
         
@@ -579,27 +524,23 @@ jobs:
     - name: 📊 Final Summary
       if: always()
       run: |
-        echo "🚀 TradePulse ML - COMPLETE FIX APPLIED"
-        echo "======================================="
+        echo "🚀 TradePulse ML - ALL FIXES APPLIED"
+        echo "===================================="
         echo "✅ PYTHONPATH: ${{ github.workspace }}"
         echo "✅ HF_TOKEN: Available"
         echo "✅ ignore_mismatched_sizes: Applied"
-        echo "✅ MultiLabelCollator: Inline"
-        echo "✅ Float32 labels: Enforced"
         echo ""
-        echo "🔧 ALL FIXES APPLIED:"
+        echo "🔧 FIXES APPLIED:"
         echo "  ✅ Job-level PYTHONPATH"
         echo "  ✅ Job-level HF_TOKEN"
         echo "  ✅ Multi-label dimensions fix"
-        echo "  ✅ DataCollator inline (no import)"
-        echo "  ✅ TOKENIZERS_PARALLELISM=false"
+        echo "  ✅ No more os.chdir()"
         echo ""
         if [ "${{ steps.training.outputs.correlations-updated }}" = "true" ]; then
           echo "🌐 Correlations Model:"
           echo "  ✅ 125 labels (commodities)"
           echo "  ✅ Multi-label classification"
-          echo "  ✅ BCEWithLogitsLoss compatible"
-          echo "  ✅ Should push to HuggingFace!"
+          echo "  ✅ ignore_mismatched_sizes=True"
         fi
 
     - name: 📤 Upload Training Artifacts
