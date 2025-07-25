@@ -46,7 +46,7 @@ def correlations_to_labels(correlation_string):
     Convert correlation string to binary label array
     
     Args:
-        correlation_string: String like "US:WHEAT,CN:STEEL,AU:IRON_ORE"
+        correlation_string: String like "US:WHEAT,CN:STEEL,AU:IRON_ORE" or "US:WHEAT;CN:STEEL;AU:IRON_ORE"
         
     Returns:
         List of 0.0s and 1.0s matching COMMODITY_CODES indices (floats for BCELoss)
@@ -65,7 +65,12 @@ def correlations_to_labels(correlation_string):
     if correlation_string.strip().lower() in {"", "nan"}:
         return [0.0] * len(COMMODITY_CODES)
     
-    correlations = [c.strip() for c in correlation_string.split(',') if c.strip()]
+    # Support both , and ; as separators
+    if ';' in correlation_string:
+        correlations = [c.strip() for c in correlation_string.split(';') if c.strip()]
+    else:
+        correlations = [c.strip() for c in correlation_string.split(',') if c.strip()]
+    
     labels = [0.0] * len(COMMODITY_CODES)
     
     for correlation in correlations:
