@@ -428,7 +428,8 @@ class Finetuner:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         baseline_model,
                         num_labels=self.num_labels,
-                        problem_type="multi_label_classification"
+                        problem_type="multi_label_classification",
+                        ignore_mismatched_sizes=True
                     )
                 else:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
@@ -449,7 +450,8 @@ class Finetuner:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         model_name,
                         num_labels=self.num_labels,
-                        problem_type="multi_label_classification"
+                        problem_type="multi_label_classification",
+                        ignore_mismatched_sizes=True
                     )
                 else:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
@@ -468,7 +470,8 @@ class Finetuner:
                 self.model = AutoModelForSequenceClassification.from_pretrained(
                     model_name,
                     num_labels=self.num_labels,
-                    problem_type="multi_label_classification"
+                    problem_type="multi_label_classification",
+                    ignore_mismatched_sizes=True
                 )
             else:
                 self.model = AutoModelForSequenceClassification.from_pretrained(
