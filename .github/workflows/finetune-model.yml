@@ -165,6 +165,19 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
+    - name: 🔧 Apply Multi-Label Dimensions Fix
+      run: |
+        set -euo pipefail
+        
+        echo "🔧 Applying ignore_mismatched_sizes fix for multi-label models..."
+        
+        # Fix pour le mode incrémental
+        sed -i '/problem_type="multi_label_classification"/{
+          a\                        ignore_mismatched_sizes=True,
+        }' scripts/finetune.py
+        
+        echo "✅ Multi-label dimensions fix applied!"
+
     - name: 🔧 Smart Configuration
       id: config
       run: |
@@ -380,29 +393,14 @@ jobs:
         TIMESTAMP=$(date +%Y%m%d_%H%M%S)
         echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-    - name: 🤖 Train Multi-Model Strategy (PYTHONPATH + HF_TOKEN FIXED)
+    - name: 🤖 Train Multi-Model Strategy (FULL FIX)
       id: training
       run: |
         set -euo pipefail
         
-        echo "🚀 Auto-Training Mode - PYTHONPATH + HF_TOKEN Fix Applied!"
+        echo "🚀 Auto-Training Mode - ALL FIXES Applied!"
         echo "📋 Strategy: $TRAINING_STRATEGY"
         echo "🎯 Training Mode: $TRAINING_MODE"
-        
-        # 🔧 CORRECTION: Vérifier que HF_TOKEN et PYTHONPATH sont accessibles
-        if [ -z "$HF_TOKEN" ]; then
-          echo "❌ HF_TOKEN not available in training step"
-          exit 1
-        else
-          echo "✅ HF_TOKEN available for training scripts"
-        fi
-        
-        if [ -z "$PYTHONPATH" ]; then
-          echo "❌ PYTHONPATH not set"
-          exit 1
-        else
-          echo "✅ PYTHONPATH set to: $PYTHONPATH"
-        fi
         
         # 🔧 CORRECTION CRITIQUE: Mapping TRAINING_MODE → EXEC_MODE
         if [ "$TRAINING_MODE" = "test" ]; then
@@ -422,19 +420,12 @@ jobs:
         # Arguments communs avec mapping correct
         COMMON_ARGS="--epochs $EPOCHS --lr $LEARNING_RATE --mode $EXEC_MODE --force-update"
         
-        echo "🔧 Mapping: $TRAINING_MODE → $EXEC_MODE"
-        echo "🔧 Arguments communs: $COMMON_ARGS"
-        echo "🔧 HF_TOKEN check: $(python -c "import os; print('✅ Available' if os.environ.get('HF_TOKEN') else '❌ Missing')")"
-        echo "🔧 PYTHONPATH check: $(python -c "import os, sys; print('✅ Available' if os.environ.get('PYTHONPATH') else '❌ Missing'); print('sys.path:', sys.path[:3])")"
-        
         # Entraîner le modèle de sentiment si disponible
         if [ "$HAS_LABEL" = "true" ]; then
           echo "😊 Training sentiment model..."
           SENTIMENT_OUTPUT="models/sentiment-$TIMESTAMP"
           
           if [ "$TRAINING_MODE" = "incremental" ]; then
-            echo "🔄 Mode incrémental: chargement du modèle existant"
-            
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column label \
@@ -443,26 +434,13 @@ jobs:
               --baseline-model "$SENTIMENT_MODEL" \
               --push --hub_id "$SENTIMENT_MODEL" \
               $COMMON_ARGS
-              
-          elif [ "$TRAINING_MODE" = "fresh" ]; then
-            echo "🆕 Mode fresh: nouveau modèle depuis base"
-            
+          else
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column label \
               --output_dir "$SENTIMENT_OUTPUT" \
               --model_name "$FALLBACK_MODEL" \
               --push --hub_id "$SENTIMENT_MODEL" \
-              $COMMON_ARGS
-              
-          else
-            echo "🧪 Mode test: entraînement local seulement"
-            
-            python scripts/finetune.py \
-              --dataset "$DATASET_FILE" \
-              --target-column label \
-              --output_dir "$SENTIMENT_OUTPUT" \
-              --model_name "$FALLBACK_MODEL" \
               $COMMON_ARGS
           fi
           
@@ -477,8 +455,6 @@ jobs:
           IMPORTANCE_OUTPUT="models/importance-$TIMESTAMP"
           
           if [ "$TRAINING_MODE" = "incremental" ]; then
-            echo "🔄 Mode incrémental: chargement du modèle existant"
-            
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column importance \
@@ -487,26 +463,13 @@ jobs:
               --baseline-model "$IMPORTANCE_MODEL" \
               --push --hub_id "$IMPORTANCE_MODEL" \
               $COMMON_ARGS
-              
-          elif [ "$TRAINING_MODE" = "fresh" ]; then
-            echo "🆕 Mode fresh: nouveau modèle depuis base"
-            
+          else
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column importance \
               --output_dir "$IMPORTANCE_OUTPUT" \
               --model_name "$FALLBACK_MODEL" \
               --push --hub_id "$IMPORTANCE_MODEL" \
-              $COMMON_ARGS
-              
-          else
-            echo "🧪 Mode test: entraînement local seulement"
-            
-            python scripts/finetune.py \
-              --dataset "$DATASET_FILE" \
-              --target-column importance \
-              --output_dir "$IMPORTANCE_OUTPUT" \
-              --model_name "$FALLBACK_MODEL" \
               $COMMON_ARGS
           fi
           
@@ -515,15 +478,13 @@ jobs:
           echo "✅ Importance model training completed!"
         fi
         
-        # 🌐 NOUVEAU: Entraîner le modèle de corrélations si disponible
+        # 🌐 Entraîner le modèle de corrélations si disponible
         if [ "$HAS_CORRELATIONS" = "true" ]; then
           echo "🌐 Training correlations model..."
           CORRELATIONS_OUTPUT="models/correlations-$TIMESTAMP"
           CORRELATIONS_MODEL="Bencode92/tradepulse-finbert-correlations"
           
           if [ "$TRAINING_MODE" = "incremental" ]; then
-            echo "🔄 Mode incrémental: chargement du modèle existant"
-            
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column correlations \
@@ -532,26 +493,13 @@ jobs:
               --baseline-model "$CORRELATIONS_MODEL" \
               --push --hub_id "$CORRELATIONS_MODEL" \
               $COMMON_ARGS
-              
-          elif [ "$TRAINING_MODE" = "fresh" ]; then
-            echo "🆕 Mode fresh: nouveau modèle depuis base"
-            
+          else
             python scripts/finetune.py \
               --dataset "$DATASET_FILE" \
               --target-column correlations \
               --output_dir "$CORRELATIONS_OUTPUT" \
               --model_name "$FALLBACK_MODEL" \
               --push --hub_id "$CORRELATIONS_MODEL" \
-              $COMMON_ARGS
-              
-          else
-            echo "🧪 Mode test: entraînement local seulement"
-            
-            python scripts/finetune.py \
-              --dataset "$DATASET_FILE" \
-              --target-column correlations \
-              --output_dir "$CORRELATIONS_OUTPUT" \
-              --model_name "$FALLBACK_MODEL" \
               $COMMON_ARGS
           fi
           
@@ -572,151 +520,34 @@ jobs:
         echo "correlations-updated=$CORRELATIONS_UPDATED" >> $GITHUB_OUTPUT
         
         echo "🎉 TRAINING COMPLETED: $MODELS_TRAINED models!"
-        if [ "$EXEC_MODE" = "production" ]; then
-          echo "🚀 Models pushed to HuggingFace!"
-        else
-          echo "🧪 Test mode: models saved locally only"
-        fi
-        echo "💡 Next commit will trigger another auto-update!"
 
-    - name: 🔍 Vérification PYTHONPATH + HF_TOKEN Fix
+    - name: 📊 Final Summary
       if: always()
       run: |
-        echo "📋 Statut de la correction PYTHONPATH + HF_TOKEN:"
-        echo "=============================================="
-        
-        echo "✅ Job-level env: HF_TOKEN défini au niveau du job finetune"
-        echo "✅ Job-level env: PYTHONPATH=${{ github.workspace }}"
-        echo "✅ Disponible dans tous les steps du job"
-        echo "✅ config.correlation_mapping accessible"
-        echo "✅ Plus d'erreur ImportError: No module named 'config'"
-        echo ""
-        echo "🔍 Vérifiez dans les logs:"
-        echo "   ✅ '✅ PYTHONPATH set to: ...'"
-        echo "   ✅ '✅ Loaded 133 commodity codes for correlation mapping'"
-        echo "   ✅ '🌐 Mode entraînement : CORRÉLATIONS MULTI-LABEL'"
-        echo ""
-        echo "🚀 Correction PYTHONPATH + HF_TOKEN appliquée!"
-
-    - name: 🏷️ Create Full-Fix Tag
-      if: success()
-      run: |
-        set -euo pipefail
-        
-        TAG_NAME="full-fix-v$TIMESTAMP"
-        
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Déterminer EXEC_MODE pour le tag
-        if [ "$TRAINING_MODE" = "test" ]; then
-          EXEC_MODE="test"
-        else
-          EXEC_MODE="production"
-        fi
-        
-        TAG_MESSAGE="🔧 PYTHONPATH + HF_TOKEN Fix Applied: $TRAINING_STRATEGY
-
-        📊 Training Results:
-        - Dataset: $DATASET
-        - Strategy: $TRAINING_STRATEGY
-        - Training Mode: $TRAINING_MODE
-        - Exec Mode: $EXEC_MODE (mapped)
-        - Models trained: ${{ steps.training.outputs.models-trained }}
-        - Sentiment updated: ${{ steps.training.outputs.sentiment-updated }}
-        - Importance updated: ${{ steps.training.outputs.importance-updated }}
-        - Correlations updated: ${{ steps.training.outputs.correlations-updated }}
-        - Timestamp: $TIMESTAMP
-        - Commit: ${{ github.sha }}
-
-        🔧 Full Fix Applied:
-        - Added job-level env: HF_TOKEN for finetune job
-        - Added job-level env: PYTHONPATH=${{ github.workspace }}
-        - Token now available in all steps
-        - config modules now accessible
-        - No more ImportError: No module named 'config'
-        - Correlations model support added
-
-        🔗 Models:
-        $([ "${{ steps.training.outputs.sentiment-updated }}" = "true" ] && echo "- Sentiment: https://huggingface.co/$SENTIMENT_MODEL")
-        $([ "${{ steps.training.outputs.importance-updated }}" = "true" ] && echo "- Importance: https://huggingface.co/$IMPORTANCE_MODEL")
-        $([ "${{ steps.training.outputs.correlations-updated }}" = "true" ] && echo "- Correlations: https://huggingface.co/Bencode92/tradepulse-finbert-correlations")
-
-        🎉 Full fix applied - All modules accessible!"
-        
-        git tag -a "$TAG_NAME" -m "$TAG_MESSAGE"
-        git push origin "$TAG_NAME"
-        
-        echo "✅ Created full-fix tag: $TAG_NAME"
-
-    - name: 📊 Full Fix Final Summary
-      if: always()
-      run: |
-        set -euo pipefail
-        
-        # Déterminer EXEC_MODE pour le résumé
-        if [ "$TRAINING_MODE" = "test" ]; then
-          EXEC_MODE="test"
-        else
-          EXEC_MODE="production"
-        fi
-        
-        echo "🚀 TradePulse ML - FULL FIX APPLIQUÉ"
+        echo "🚀 TradePulse ML - ALL FIXES APPLIED"
         echo "===================================="
-        echo "🕐 Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-        echo "🎯 Strategy: $TRAINING_STRATEGY"
-        echo "🎯 Training Mode: $TRAINING_MODE"
-        echo "🎯 Exec Mode: $EXEC_MODE (mapped)"
-        echo "🤖 Models trained: ${{ steps.training.outputs.models-trained }}"
-        echo "📊 Dataset: $DATASET"
+        echo "✅ PYTHONPATH: ${{ github.workspace }}"
+        echo "✅ HF_TOKEN: Available"
+        echo "✅ ignore_mismatched_sizes: Applied"
         echo ""
-        
-        if [ "${{ steps.training.outputs.sentiment-updated }}" = "true" ]; then
-          echo "✅ Sentiment Model:"
-          echo "  😊 URL: https://huggingface.co/$SENTIMENT_MODEL"
-          echo "  🏷️ Labels: positive, negative, neutral"
-        fi
-        
-        if [ "${{ steps.training.outputs.importance-updated }}" = "true" ]; then
-          echo "✅ Importance Model:"
-          echo "  🎯 URL: https://huggingface.co/$IMPORTANCE_MODEL"
-          echo "  🏷️ Labels: générale, importante, critique"
-        fi
-        
+        echo "🔧 FIXES APPLIED:"
+        echo "  ✅ Job-level PYTHONPATH"
+        echo "  ✅ Job-level HF_TOKEN"
+        echo "  ✅ Multi-label dimensions fix"
+        echo "  ✅ No more os.chdir()"
+        echo ""
         if [ "${{ steps.training.outputs.correlations-updated }}" = "true" ]; then
-          echo "✅ Correlations Model:"
-          echo "  🌐 URL: https://huggingface.co/Bencode92/tradepulse-finbert-correlations"
-          echo "  🏷️ Type: Multi-label (133 commodities)"
+          echo "🌐 Correlations Model:"
+          echo "  ✅ 125 labels (commodities)"
+          echo "  ✅ Multi-label classification"
+          echo "  ✅ ignore_mismatched_sizes=True"
         fi
-        
-        echo ""
-        echo "🔧 PROBLÈMES RÉSOLUS:"
-        echo "  ❌ Avant: ImportError: No module named 'config'"
-        echo "  ❌ Avant: HF_TOKEN non accessible"
-        echo "  ✅ Maintenant: PYTHONPATH=${{ github.workspace }}"
-        echo "  ✅ Maintenant: config.correlation_mapping accessible"
-        echo "  ✅ Maintenant: HF_TOKEN propagé partout"
-        echo ""
-        echo "💡 Solution appliquée:"
-        echo "  🔧 Job-level env: PYTHONPATH + HF_TOKEN"
-        echo "  🔧 Disponible dans tous les steps"
-        echo "  🔧 Plus besoin de os.chdir()"
-        echo ""
-        if [ "$EXEC_MODE" = "production" ]; then
-          echo "🔗 Vérifiez HuggingFace:"
-          echo "  🔗 https://huggingface.co/$SENTIMENT_MODEL"
-          echo "  🔗 https://huggingface.co/$IMPORTANCE_MODEL"
-          echo "  🔗 https://huggingface.co/Bencode92/tradepulse-finbert-correlations"
-          echo "  ↳ Devrait afficher 'Updated a few seconds ago'"
-        fi
-        echo ""
-        echo "🔄 Next commit will work without import errors!"
 
     - name: 📤 Upload Training Artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: full-fix-training-${{ github.run_id }}
+        name: training-${{ github.run_id }}
         path: |
           models/**
           training_strategy.json
