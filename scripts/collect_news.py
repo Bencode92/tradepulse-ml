@@ -57,7 +57,7 @@ except ImportError as e:
 ML_MODELS_CONFIG = {
     "sentiment": "Bencode92/tradepulse-finbert-sentiment",    # ✅ Modèle sentiment entraîné
     "importance": "Bencode92/tradepulse-finbert-importance",  # ✅ Modèle importance entraîné
-    "correlation": "Bencode92/tradepulse-correlation",        # ✅ Modèle corrélation ML
+    "correlation": "Bencode92/tradepulse-finbert-correlations",  # ✅ Modèle corrélation ML
     "production": "Bencode92/tradepulse-finbert-sentiment",   # Alias pour compatibilité
     "fallback": "yiyanghkust/finbert-tone",                   # Fallback de base
 }
