@@ -49,13 +49,13 @@ def correlations_to_labels(correlation_string):
         correlation_string: String like "US:WHEAT,CN:STEEL,AU:IRON_ORE"
         
     Returns:
-        List of 0s and 1s matching COMMODITY_CODES indices
+        List of 0.0s and 1.0s matching COMMODITY_CODES indices (floats for BCELoss)
     """
     # Handle NaN and None values
     if correlation_string is None or (
         isinstance(correlation_string, float) and math.isnan(correlation_string)
     ):
-        return [0] * len(COMMODITY_CODES)
+        return [0.0] * len(COMMODITY_CODES)
     
     # Convert to string if not already
     if not isinstance(correlation_string, str):
@@ -63,14 +63,14 @@ def correlations_to_labels(correlation_string):
     
     # Handle empty strings and 'nan' string
     if correlation_string.strip().lower() in {"", "nan"}:
-        return [0] * len(COMMODITY_CODES)
+        return [0.0] * len(COMMODITY_CODES)
     
     correlations = [c.strip() for c in correlation_string.split(',') if c.strip()]
-    labels = [0] * len(COMMODITY_CODES)
+    labels = [0.0] * len(COMMODITY_CODES)
     
     for correlation in correlations:
         if correlation in COMMODITY_TO_INDEX:
-            labels[COMMODITY_TO_INDEX[correlation]] = 1
+            labels[COMMODITY_TO_INDEX[correlation]] = 1.0
     
     return labels
 
