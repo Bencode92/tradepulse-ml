@@ -2,6 +2,7 @@
 Commodity correlation mapping for TradePulse ML
 Maps commodity codes to label indices for multi-label classification
 """
+import math
 
 COMMODITY_CODES = [
     "AE:DIAMONDS", "AE:PETROLEUM_CRUDE", "AR:CORN", "AU:ALUMINIUM_ORE", 
@@ -50,7 +51,18 @@ def correlations_to_labels(correlation_string):
     Returns:
         List of 0s and 1s matching COMMODITY_CODES indices
     """
-    if not correlation_string or correlation_string == 'nan':
+    # Handle NaN and None values
+    if correlation_string is None or (
+        isinstance(correlation_string, float) and math.isnan(correlation_string)
+    ):
+        return [0] * len(COMMODITY_CODES)
+    
+    # Convert to string if not already
+    if not isinstance(correlation_string, str):
+        correlation_string = str(correlation_string)
+    
+    # Handle empty strings and 'nan' string
+    if correlation_string.strip().lower() in {"", "nan"}:
         return [0] * len(COMMODITY_CODES)
     
     correlations = [c.strip() for c in correlation_string.split(',') if c.strip()]
