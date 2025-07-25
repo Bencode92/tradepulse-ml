@@ -428,15 +428,14 @@ class Finetuner:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         baseline_model,
                         num_labels=self.num_labels,
-                        problem_type="multi_label_classification",
-                        ignore_mismatched_sizes=True
+                        problem_type="multi_label_classification"
                     )
                 else:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         baseline_model,
                         num_labels=self.num_labels,
                         id2label=self.ID2LABEL,
-                        label2id=self.LABEL_MAP,
+                        label2id=self.LABEL_MAP
                     )
                 logger.info(f"✅ Modèle incrémental chargé: {baseline_model}")
                 self.model_name = baseline_model  # Update model name
@@ -450,15 +449,14 @@ class Finetuner:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         model_name,
                         num_labels=self.num_labels,
-                        problem_type="multi_label_classification",
-                        ignore_mismatched_sizes=True
+                        problem_type="multi_label_classification"
                     )
                 else:
                     self.model = AutoModelForSequenceClassification.from_pretrained(
                         model_name,
                         num_labels=self.num_labels,
                         id2label=self.ID2LABEL,
-                        label2id=self.LABEL_MAP,
+                        label2id=self.LABEL_MAP
                     )
                 self.baseline_model = model_name
         else:
@@ -470,15 +468,14 @@ class Finetuner:
                 self.model = AutoModelForSequenceClassification.from_pretrained(
                     model_name,
                     num_labels=self.num_labels,
-                    problem_type="multi_label_classification",
-                    ignore_mismatched_sizes=True
+                    problem_type="multi_label_classification"
                 )
             else:
                 self.model = AutoModelForSequenceClassification.from_pretrained(
                     model_name,
                     num_labels=self.num_labels,
                     id2label=self.ID2LABEL,
-                    label2id=self.LABEL_MAP,
+                    label2id=self.LABEL_MAP
                 )
             logger.info("✅ Model & tokenizer loaded : %s", model_name)
 
