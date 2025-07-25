@@ -166,30 +166,72 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
 
-    - name: 🔧 Apply ALL Fixes (Multi-Label + DataCollator)
+    - name: 🔧 Apply ALL Fixes Inline
       run: |
         set -euo pipefail
         
-        echo "🔧 Applying all fixes for multi-label models..."
+        echo "🔧 Applying all fixes directly in finetune.py..."
+        
+        # Create a patch file with all fixes
+        cat > finetune_patch.py << 'EOF'
+        # Insert after imports section
+        
+        # MultiLabelCollator inline
+        class MultiLabelCollator(DataCollatorWithPadding):
+            """Data collator that ensures labels are float32 for multi-label classification"""
+            def __call__(self, features):
+                batch = super().__call__(features)
+                if "labels" in batch:
+                    batch["labels"] = batch["labels"].to(torch.float32)
+                return batch
+        EOF
+        
+        # Apply fixes to finetune.py
+        python3 << 'PYTHON_SCRIPT'
+        import re
+        
+        # Read finetune.py
+        with open('scripts/finetune.py', 'r') as f:
+            content = f.read()
         
         # Fix 1: Add ignore_mismatched_sizes
-        sed -i 's/problem_type="multi_label_classification"/problem_type="multi_label_classification",\n                        ignore_mismatched_sizes=True/g' scripts/finetune.py
+        content = content.replace(
+            'problem_type="multi_label_classification"',
+            'problem_type="multi_label_classification",\n                        ignore_mismatched_sizes=True'
+        )
         
-        # Fix 2: Import and use MultiLabelCollator
-        sed -i '/from transformers import (/s/)/, DataCollatorWithPadding)/' scripts/finetune.py
-        sed -i '/^from transformers/a from scripts.data_collator import MultiLabelCollator' scripts/finetune.py
+        # Fix 2: Add MultiLabelCollator class after imports
+        import_section_end = content.find('# ---------------------------------------------------------------------------')
+        if import_section_end > 0:
+            # Read patch content
+            with open('finetune_patch.py', 'r') as f:
+                patch = f.read()
+            # Insert before first separator
+            content = content[:import_section_end] + '\n' + patch + '\n' + content[import_section_end:]
         
-        # Fix 3: Replace trainer instantiation for multi-label
-        sed -i '/# 🌐 NOUVEAU : CustomTrainer avec support multi-label/,/trainer = Trainer(/{
-          /if custom_loss_fn or self.is_multi_label:/,/else:/{
-            s/data_collator=None,/data_collator=MultiLabelCollator(self.tokenizer) if self.is_multi_label else None,/
-          }
-          /trainer = Trainer(/,/)/{ 
-            s/data_collator=None,/data_collator=MultiLabelCollator(self.tokenizer) if self.is_multi_label else None,/
-          }
-        }' scripts/finetune.py
+        # Fix 3: Use MultiLabelCollator in CustomTrainer
+        content = re.sub(
+            r'(trainer = CustomTrainer\([^)]+)\)',
+            lambda m: m.group(1) + ',\n                data_collator=MultiLabelCollator(self.tokenizer) if self.is_multi_label else None)',
+            content
+        )
         
-        echo "✅ All fixes applied!"
+        # Fix 4: Use MultiLabelCollator in regular Trainer
+        content = re.sub(
+            r'(trainer = Trainer\([^)]+)(\n\s+\))',
+            lambda m: m.group(1) + ',\n                data_collator=MultiLabelCollator(self.tokenizer) if hasattr(self, "is_multi_label") and self.is_multi_label else None' + m.group(2),
+            content
+        )
+        
+        # Write back
+        with open('scripts/finetune.py', 'w') as f:
+            f.write(content)
+        
+        print("✅ All fixes applied!")
+        PYTHON_SCRIPT
+        
+        # Cleanup
+        rm -f finetune_patch.py
 
     - name: 🔧 Smart Configuration
       id: config
@@ -542,14 +584,14 @@ jobs:
         echo "✅ PYTHONPATH: ${{ github.workspace }}"
         echo "✅ HF_TOKEN: Available"
         echo "✅ ignore_mismatched_sizes: Applied"
-        echo "✅ MultiLabelCollator: Applied"
+        echo "✅ MultiLabelCollator: Inline"
         echo "✅ Float32 labels: Enforced"
         echo ""
         echo "🔧 ALL FIXES APPLIED:"
         echo "  ✅ Job-level PYTHONPATH"
         echo "  ✅ Job-level HF_TOKEN"
         echo "  ✅ Multi-label dimensions fix"
-        echo "  ✅ DataCollator for float32"
+        echo "  ✅ DataCollator inline (no import)"
         echo "  ✅ TOKENIZERS_PARALLELISM=false"
         echo ""
         if [ "${{ steps.training.outputs.correlations-updated }}" = "true" ]; then
