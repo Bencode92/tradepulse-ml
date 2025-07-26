@@ -136,6 +136,16 @@ except ImportError:
     CORRELATION_SUPPORT = False
     COMMODITY_CODES = []
 
+# 🔧 PATCH : Import iterative stratification pour multi-label
+try:
+    from skmultilearn.model_selection import iterative_train_test_split
+    ITERATIVE_SPLIT = True
+except ImportError:
+    ITERATIVE_SPLIT = False
+    logger = logging.getLogger("tradepulse-finetune")
+    logger.warning("⚠️ skmultilearn non installé, split stratifié multi-label désactivé")
+    logger.info("💡 Installer avec: pip install scikit-multilearn")
+
 # 🎯 NOUVEAU : Configuration des modèles spécialisés (ajout corrélations)
 MODELS_CONFIG = {
     "sentiment": {
@@ -261,6 +271,7 @@ class CustomTrainer(Trainer):
     def __init__(self, loss_fn=None, **kwargs):
         super().__init__(**kwargs)
         self.custom_loss_fn = loss_fn
+        self.pos_weight = None  # 🔧 PATCH : Pour multi-label
         
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.get("labels")
@@ -275,8 +286,13 @@ class CustomTrainer(Trainer):
             else:
                 # 🌐 NOUVEAU : BCEWithLogitsLoss pour multi-label
                 if hasattr(self, 'is_multi_label') and self.is_multi_label:
+                    # 🔧 PATCH : Utiliser pos_weight par label si disponible
+                    pos_weight = None
+                    if hasattr(self, 'pos_weight') and self.pos_weight is not None:
+                        pos_weight = self.pos_weight.to(outputs.logits.device)
+                    
                     loss = nn.functional.binary_cross_entropy_with_logits(
-                        outputs.logits, labels.float()
+                        outputs.logits, labels.float(), pos_weight=pos_weight
                     )
                 else:
                     loss = nn.functional.cross_entropy(outputs.logits, labels)
@@ -829,72 +845,128 @@ tmp_eval/
 
         # 🌐 NOUVEAU : Gestion différente pour multi-label
         if self.is_multi_label:
-            # Pour multi-label, pas de stratification possible
-            can_stratify = False
-            label_field = "labels"
+            # 🔧 PATCH : Préparer les données pour split stratifié multi-label
+            X = [d["text"] for d in data]
+            y = np.array([d["labels"] for d in data])
+            
+            # Log distribution
+            logger.info(f"📊 Labels positifs total: {y.sum()}")
+            logger.info(f"📊 Labels avec ≥1 positif: {(y.sum(axis=0) > 0).sum()} / {y.shape[1]}")
+            
+            if ITERATIVE_SPLIT and len(data) >= 10:
+                try:
+                    # 🔧 PATCH : Split stratifié itératif pour multi-label
+                    if self.incremental_mode:
+                        # Mode incrémental : 70% train, 20% val, 10% test
+                        X_train_val, y_train_val, X_test, y_test = iterative_train_test_split(
+                            np.array(X).reshape(-1, 1), y, test_size=0.1
+                        )
+                        X_train, y_train, X_val, y_val = iterative_train_test_split(
+                            X_train_val, y_train_val, test_size=0.22  # 0.22 de 90% ≈ 20% total
+                        )
+                    else:
+                        # Mode classique : 80% train, 20% val
+                        X_train, y_train, X_val, y_val = iterative_train_test_split(
+                            np.array(X).reshape(-1, 1), y, test_size=0.2
+                        )
+                        X_test = y_test = None
+                    
+                    # Reconstruire les dicts
+                    train = [{"text": X_train[i, 0], "labels": y_train[i].tolist()} 
+                            for i in range(len(X_train))]
+                    val = [{"text": X_val[i, 0], "labels": y_val[i].tolist()} 
+                          for i in range(len(X_val))]
+                    test_data = [{"text": X_test[i, 0], "labels": y_test[i].tolist()} 
+                                for i in range(len(X_test))] if X_test is not None else []
+                    
+                    logger.info("✅ Split stratifié multi-label réussi")
+                    
+                    # Vérifier la distribution après split
+                    y_train_check = np.array([d["labels"] for d in train])
+                    y_val_check = np.array([d["labels"] for d in val])
+                    
+                    logger.info(f"📊 Train - Positifs: {y_train_check.sum()}, Labels actifs: {(y_train_check.sum(axis=0) > 0).sum()}")
+                    logger.info(f"📊 Val - Positifs: {y_val_check.sum()}, Labels actifs: {(y_val_check.sum(axis=0) > 0).sum()}")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ Split stratifié échoué: {e}, fallback split simple")
+                    # Fallback
+                    split_idx = int(len(data) * 0.8)
+                    train = data[:split_idx]
+                    val = data[split_idx:]
+                    test_data = []
+            else:
+                # Split simple pour petits datasets
+                logger.warning("⚠️ Dataset trop petit ou skmultilearn non installé, split simple")
+                split_idx = int(len(data) * 0.8)
+                train = data[:split_idx]
+                val = data[split_idx:]
+                test_data = []
+                
         else:
+            # Single-label : code existant
             can_stratify = self._check_dataset_balance(data)
             label_field = "label"
-        
-        if self.incremental_mode:
-            # 🚀 NOUVEAU : Division en 3 parties pour l'apprentissage incrémental
-            # 70% train, 20% validation, 10% test (pour évaluation baseline)
-            if len(data) >= 10 and can_stratify:
-                # Split stratifié si possible
-                train_val, test_data = train_test_split(
-                    data,
-                    test_size=0.1,
-                    stratify=[d[label_field] for d in data],
-                    random_state=42,
-                )
-                
-                train, val = train_test_split(
-                    train_val,
-                    test_size=0.25,  # 0.25 de 90% = 22.5% du total ≈ 20%
-                    stratify=[d[label_field] for d in train_val] if self._check_dataset_balance(train_val) else None,
-                    random_state=42,
-                )
-            else:
-                # Split simple pour petits datasets ou multi-label
-                logger.warning("⚠️ Dataset trop petit ou multi-label, utilisation de proportions adaptées")
-                
-                if len(data) >= 5:
-                    # Au moins 5 échantillons : 1 pour test, reste pour train/val
-                    test_data = data[:1]
-                    train_val = data[1:]
+            
+            if self.incremental_mode:
+                # 🚀 NOUVEAU : Division en 3 parties pour l'apprentissage incrémental
+                # 70% train, 20% validation, 10% test (pour évaluation baseline)
+                if len(data) >= 10 and can_stratify:
+                    # Split stratifié si possible
+                    train_val, test_data = train_test_split(
+                        data,
+                        test_size=0.1,
+                        stratify=[d[label_field] for d in data],
+                        random_state=42,
+                    )
                     
-                    if len(train_val) >= 2:
-                        train = train_val[:-1]
-                        val = train_val[-1:]
-                    else:
-                        train = train_val
-                        val = []
+                    train, val = train_test_split(
+                        train_val,
+                        test_size=0.25,  # 0.25 de 90% = 22.5% du total ≈ 20%
+                        stratify=[d[label_field] for d in train_val] if self._check_dataset_balance(train_val) else None,
+                        random_state=42,
+                    )
                 else:
-                    # Très petit dataset : tout en train, pas de validation
-                    train = data
-                    val = []
-                    test_data = []
-            
-            logger.info(f"📊 Mode incrémental - Train: {len(train)}, Validation: {len(val)}, Test: {len(test_data)}")
-        else:
-            # Mode classique (existant, conservé mais avec gestion des petits datasets)
-            if len(data) >= 4 and can_stratify:
-                # Split stratifié si possible
-                train, val = train_test_split(
-                    data,
-                    test_size=0.2,
-                    stratify=[d[label_field] for d in data],
-                    random_state=42,
-                )
+                    # Split simple pour petits datasets
+                    logger.warning("⚠️ Dataset trop petit, utilisation de proportions adaptées")
+                    
+                    if len(data) >= 5:
+                        # Au moins 5 échantillons : 1 pour test, reste pour train/val
+                        test_data = data[:1]
+                        train_val = data[1:]
+                        
+                        if len(train_val) >= 2:
+                            train = train_val[:-1]
+                            val = train_val[-1:]
+                        else:
+                            train = train_val
+                            val = []
+                    else:
+                        # Très petit dataset : tout en train, pas de validation
+                        train = data
+                        val = []
+                        test_data = []
+                
+                logger.info(f"📊 Mode incrémental - Train: {len(train)}, Validation: {len(val)}, Test: {len(test_data)}")
             else:
-                # Split simple pour petits datasets ou multi-label
-                logger.warning("⚠️ Dataset trop petit, déséquilibré ou multi-label, split simple sans stratification")
-                split_idx = max(1, int(len(data) * 0.8))
-                train = data[:split_idx]
-                val = data[split_idx:] if len(data) > split_idx else []
-            
-            test_data = []  # Pas de dataset de test en mode classique
-            logger.info(f"📊 Mode classique - Train: {len(train)}, Validation: {len(val)}")
+                # Mode classique (existant, conservé mais avec gestion des petits datasets)
+                if len(data) >= 4 and can_stratify:
+                    # Split stratifié si possible
+                    train, val = train_test_split(
+                        data,
+                        test_size=0.2,
+                        stratify=[d[label_field] for d in data],
+                        random_state=42,
+                    )
+                else:
+                    # Split simple pour petits datasets
+                    logger.warning("⚠️ Dataset trop petit, déséquilibré, split simple sans stratification")
+                    split_idx = max(1, int(len(data) * 0.8))
+                    train = data[:split_idx]
+                    val = data[split_idx:] if len(data) > split_idx else []
+                
+                test_data = []  # Pas de dataset de test en mode classique
+                logger.info(f"📊 Mode classique - Train: {len(train)}, Validation: {len(val)}")
 
         def tok(batch):
             return self.tokenizer(
@@ -967,16 +1039,25 @@ tmp_eval/
 
     @staticmethod
     def _metrics_multilabel(pred: EvalPrediction) -> Dict[str, float]:
-        """🌐 NOUVEAU : Métriques pour classification multi-label"""
+        """🌐 NOUVEAU : Métriques pour classification multi-label avec seuils adaptés"""
         logits, labels = pred
-        # Convertir logits en prédictions binaires
-        preds = torch.sigmoid(torch.from_numpy(logits)).numpy() > 0.5
+        probs = torch.sigmoid(torch.from_numpy(logits)).numpy()
         
-        # F1 micro et macro
+        # 🔧 PATCH : Seuil adaptatif plus bas pour labels rares
+        threshold = 0.25  # Plus bas pour détecter les corrélations rares
+        preds = probs > threshold
+        
+        # 🔧 PATCH : Fallback top-k si aucune prédiction
+        k = 1  # Au moins 1 prédiction par échantillon
+        rows_no_pred = np.where(preds.sum(axis=1) == 0)[0]
+        for i in rows_no_pred:
+            top_indices = probs[i].argsort()[-k:]
+            preds[i, top_indices] = True
+        
+        # Métriques
         f1_micro = f1_score(labels, preds, average='micro', zero_division=0)
         f1_macro = f1_score(labels, preds, average='macro', zero_division=0)
         
-        # Precision et recall
         prec_micro, rec_micro, _, _ = precision_recall_fscore_support(
             labels, preds, average='micro', zero_division=0
         )
@@ -984,12 +1065,13 @@ tmp_eval/
             labels, preds, average='macro', zero_division=0
         )
         
-        # Hamming loss (proportion d'étiquettes mal prédites)
         h_loss = hamming_loss(labels, preds)
-        hamming_score = 1 - h_loss  # Plus intuitif : plus c'est haut, mieux c'est
-        
-        # Subset accuracy (toutes les étiquettes correctes)
+        hamming_score = 1 - h_loss
         subset_acc = np.mean(np.all(preds == labels, axis=1))
+        
+        # 🔧 PATCH : Log distribution pour debug
+        logger.info(f"📊 Seuil: {threshold}, Prédictions positives: {preds.sum()} / {preds.size}")
+        logger.info(f"📊 Labels actifs prédits: {(preds.sum(axis=0) > 0).sum()} / {preds.shape[1]}")
         
         return {
             "f1_micro": f1_micro,
@@ -1022,7 +1104,26 @@ tmp_eval/
 
         # ⚖️ NOUVEAU : Créer la fonction de loss pour class balancing (pas pour multi-label)
         custom_loss_fn = None
-        if self.class_balancing and not self.is_multi_label and len(ds["train"]) > 0:
+        pos_weight_tensor = None
+        
+        if self.is_multi_label and len(ds["train"]) > 0:
+            # 🔧 PATCH : Calculer pos_weight par label pour multi-label
+            y_train = np.array(ds["train"]["labels"], dtype=np.float32)
+            
+            # Calculer pos_weight par label
+            pos_counts = y_train.sum(axis=0)
+            neg_counts = y_train.shape[0] - pos_counts
+            
+            # Éviter division par zéro et clipper
+            pos_weight = neg_counts / np.clip(pos_counts, 1.0, None)
+            pos_weight = np.clip(pos_weight, 1.0, 50.0)
+            
+            pos_weight_tensor = torch.tensor(pos_weight, dtype=torch.float32)
+            
+            logger.info(f"⚖️ Pos weights - Min: {pos_weight.min():.2f}, Max: {pos_weight.max():.2f}, Mean: {pos_weight.mean():.2f}")
+            logger.info(f"⚖️ Labels sans positifs: {(pos_counts == 0).sum()}")
+            
+        elif self.class_balancing and not self.is_multi_label and len(ds["train"]) > 0:
             train_labels = ds["train"]["labels"]
             custom_loss_fn = self.create_loss_function(train_labels)
             if custom_loss_fn:
@@ -1095,6 +1196,10 @@ tmp_eval/
                 callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)] if len(ds["validation"]) > 0 else [],
             )
             trainer.is_multi_label = self.is_multi_label  # 🌐 Passer l'info au trainer
+            
+            # 🔧 PATCH : Passer pos_weight au trainer pour multi-label
+            if pos_weight_tensor is not None:
+                trainer.pos_weight = pos_weight_tensor
         else:
             trainer = Trainer(
                 model=self.model,
