@@ -26,6 +26,8 @@ from typing import Dict, List, Optional, Set, Tuple
 import requests
 import time
 import sys
+import numpy as np
+from collections import defaultdict
 
 # Configuration des logs
 logging.basicConfig(
@@ -109,29 +111,6 @@ FMP_LIMITS = {
     "press_releases": 5
 }
 
-class RateController:
-    """Maintient un taux cible d'articles avec au moins un label positif."""
-    def __init__(self, target_rate=0.03, init_thresh=0.35, min_thresh=0.15, max_thresh=0.70, alpha=0.15):
-        self.target = target_rate
-        self.thresh = init_thresh
-        self.min = min_thresh
-        self.max = max_thresh
-        self.alpha = alpha
-        self.n = 0
-        self.pos = 0
-
-    def update(self, had_positive: bool):
-        self.n += 1
-        if had_positive:
-            self.pos += 1
-        rate = self.pos / max(1, self.n)
-        err = self.target - rate
-        self.thresh = float(min(self.max, max(self.min, self.thresh - self.alpha * err)))
-        return self.thresh
-
-    def current(self) -> float:
-        return self.thresh
-
 class SmartNewsCollector:
     """Collecteur avec triple ML (sentiment + importance + correlations) - MODÈLES PRODUITS"""
     
@@ -158,8 +137,8 @@ class SmartNewsCollector:
         self.correlation_classifier = None  # Nouveau modèle ML
         self.commodity_codes = []  # 🔧 FIX: Initialiser vide
         
-        # Contrôle du taux d'articles avec corrélations (~3%)
-        self.corr_rate = RateController(target_rate=0.03, init_thresh=0.35, min_thresh=0.15, max_thresh=0.70, alpha=0.15)
+        # Compteur de labels pour ajustement par rareté
+        self.label_counts = defaultdict(int)
         
         # Commodity Correlator (fallback)
         self.correlator = CommodityCorrelator() if CORRELATOR_AVAILABLE else None
@@ -292,8 +271,15 @@ class SmartNewsCollector:
             self.importance_classifier = None
             self.correlation_classifier = None
 
+    def _adaptive_threshold(self, arr, p=0.97, t_min=0.22, t_max=0.55):
+        """Seuil par percentile, borné."""
+        if len(arr) == 0:
+            return t_max
+        q = float(np.quantile(arr, p))
+        return float(min(t_max, max(t_min, q)))
+
     def _predict_correlations_ml(self, text: str) -> List[str]:
-        """🔗 Prédit les corrélations avec seuil adaptatif pour viser ~3% d'articles positifs."""
+        """🔗 Prédit les corrélations avec seuil adaptatif basé sur la distribution des scores."""
         if not self.correlation_classifier:
             return []
 
@@ -304,29 +290,45 @@ class SmartNewsCollector:
                 preds = preds[0]
 
             scores = [(p.get("label", ""), float(p.get("score", 0.0))) for p in preds]
-            # Tri décroissant par score
             scores.sort(key=lambda x: x[1], reverse=True)
 
-            # seuil courant (vise ~3%)
-            T = self.corr_rate.current()
+            # seuil adaptatif par distribution de l'ARTICLE
+            arr = [sc for _, sc in scores]
+            T = self._adaptive_threshold(arr, p=0.97, t_min=0.22, t_max=0.55)
 
-            picked = [lab for lab, sc in scores if sc >= T]
+            # ajustement léger selon rareté (optionnel)
+            # rares -> -0.02, fréquents -> +0.02
+            def rarity_shift(label: str) -> float:
+                c = self.label_counts.get(label, 0)
+                if c >= 10:    # très fréquent dans la session
+                    return +0.02
+                if c <= 1:     # rare
+                    return -0.02
+                return 0.0
+
+            picked = []
+            for lab, sc in scores:
+                thr = T + rarity_shift(lab)
+                if sc >= thr:
+                    picked.append(lab)
+
+            # Fallback TOP1 si rien mais signal net
+            if not picked and scores:
+                top_lab, top_sc = scores[0]
+                if top_sc >= 0.40:
+                    picked = [top_lab]
+
             # limiter le bruit
             MAX_LABELS = 3
             picked = picked[:MAX_LABELS]
 
-            # fallback: si rien et top score correct, sortir le top-1
-            if not picked and scores:
-                top_lab, top_sc = scores[0]
-                if top_sc >= max(0.40, T):
-                    picked = [top_lab]
-
-            # MàJ contrôleur (avons-nous prédit au moins un label ?)
-            self.corr_rate.update(bool(picked))
-
-            # Optionnel: filtrer par liste blanche si fournie
+            # liste blanche éventuelle
             if self.commodity_codes:
                 picked = [lab for lab in picked if lab in self.commodity_codes]
+
+            # maj compteurs
+            for lab in picked:
+                self.label_counts[lab] += 1
 
             return picked
 
@@ -766,7 +768,6 @@ class SmartNewsCollector:
             logger.info(f"🎯 Modèle importance: {ML_MODELS_CONFIG['importance']}")
             if self.correlation_classifier:
                 logger.info(f"🔗 Modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
-            logger.info(f"🔧 Seuil corrélation initial: {self.corr_rate.current():.3f}")
         
         if CORRELATOR_AVAILABLE and not self.correlation_classifier:
             logger.info(f"🔗 Détection des corrélations commodités par règles (fallback)")
@@ -786,8 +787,12 @@ class SmartNewsCollector:
         
         # Statistiques corrélations
         correlation_stats = {}
+        articles_with_corr = 0
         for article in articles:
-            for corr in article.get("correlations", []):
+            corr_list = article.get("correlations", [])
+            if corr_list:
+                articles_with_corr += 1
+            for corr in corr_list:
                 correlation_stats[corr] = correlation_stats.get(corr, 0) + 1
         
         logger.info(f"📊 Distribution sentiment: {label_counts}")
@@ -795,17 +800,19 @@ class SmartNewsCollector:
         if correlation_stats:
             top_correlations = sorted(correlation_stats.items(), key=lambda x: x[1], reverse=True)[:5]
             logger.info(f"🔗 Top 5 corrélations: {top_correlations}")
+        
+        # Statistiques de session
+        if self.label_counts:
+            top_labels = sorted(self.label_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            logger.info(f"🔗 Top labels corrélation (session): {top_labels}")
+        
+        logger.info(f"📈 Articles avec ≥1 corrélation: {articles_with_corr}/{len(articles)} ({100*articles_with_corr/len(articles):.1f}%)")
         logger.info(f"🗄️ Cache: {len(self.seen_articles)} articles connus")
         
         if self.auto_label:
             needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
             high_confidence_count = len(articles) - needs_review_count
             logger.info(f"🎯 Articles haute confiance PRODUIT: {high_confidence_count}/{len(articles)}")
-
-        if hasattr(self, "corr_rate"):
-            rate = (self.corr_rate.pos / max(1, self.corr_rate.n)) * 100.0
-            logger.info(f"📈 Taux d'articles avec ≥1 corrélation prédite: {rate:.2f}% (cible 3%)")
-            logger.info(f"🔧 Seuil corrélation final: {self.corr_rate.current():.3f}")
 
         return self.save_dataset(articles, output_file)
 
