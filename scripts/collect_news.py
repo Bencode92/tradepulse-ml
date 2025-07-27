@@ -695,8 +695,8 @@ class SmartNewsCollector:
             writer.writerow(["text", "label", "importance", "correlations"])  # 4 colonnes
             
             for article in articles:
-                # Joindre les corrélations avec des virgules
-                correlations_str = ",".join(article.get("correlations", []))
+                # Joindre les corrélations avec des point-virgules
+                correlations_str = ";".join(article.get("correlations", []))
                 
                 writer.writerow([
                     article["text"], 
