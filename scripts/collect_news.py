@@ -109,6 +109,29 @@ FMP_LIMITS = {
     "press_releases": 5
 }
 
+class RateController:
+    """Maintient un taux cible d'articles avec au moins un label positif."""
+    def __init__(self, target_rate=0.03, init_thresh=0.35, min_thresh=0.15, max_thresh=0.70, alpha=0.15):
+        self.target = target_rate
+        self.thresh = init_thresh
+        self.min = min_thresh
+        self.max = max_thresh
+        self.alpha = alpha
+        self.n = 0
+        self.pos = 0
+
+    def update(self, had_positive: bool):
+        self.n += 1
+        if had_positive:
+            self.pos += 1
+        rate = self.pos / max(1, self.n)
+        err = self.target - rate
+        self.thresh = float(min(self.max, max(self.min, self.thresh - self.alpha * err)))
+        return self.thresh
+
+    def current(self) -> float:
+        return self.thresh
+
 class SmartNewsCollector:
     """Collecteur avec triple ML (sentiment + importance + correlations) - MODÈLES PRODUITS"""
     
@@ -134,6 +157,9 @@ class SmartNewsCollector:
         self.importance_classifier = None
         self.correlation_classifier = None  # Nouveau modèle ML
         self.commodity_codes = []  # 🔧 FIX: Initialiser vide
+        
+        # Contrôle du taux d'articles avec corrélations (~3%)
+        self.corr_rate = RateController(target_rate=0.03, init_thresh=0.35, min_thresh=0.15, max_thresh=0.70, alpha=0.15)
         
         # Commodity Correlator (fallback)
         self.correlator = CommodityCorrelator() if CORRELATOR_AVAILABLE else None
@@ -219,29 +245,43 @@ class SmartNewsCollector:
             # 3. Modèle corrélation ML (NOUVEAU)
             try:
                 logger.info(f"🔗 Chargement modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
-                
-                # 🔧 FIX: Charger d'abord le mapping
+
+                # Charger le mapping local si dispo
                 try:
                     from config.correlation_mapping import COMMODITY_CODES
                     self.commodity_codes = COMMODITY_CODES
-                    logger.info(f"📊 {len(COMMODITY_CODES)} codes de commodités chargés")
+                    logger.info(f"📊 {len(COMMODITY_CODES)} codes de commodités chargés (local)")
                 except ImportError:
-                    logger.warning("⚠️ correlation_mapping.py non trouvé")
+                    logger.warning("⚠️ correlation_mapping.py non trouvé — tentative lecture id2label HF")
                     self.commodity_codes = []
-                
-                # Charger le modèle seulement si on a les codes
-                if self.commodity_codes:
-                    self.correlation_classifier = pipeline(
-                        "text-classification",
-                        model=ML_MODELS_CONFIG["correlation"],
-                        device=device,
-                        top_k=None,  # Retourner tous les scores
-                        **model_kwargs
-                    )
-                    logger.info("✅ Modèle corrélation ML chargé")
-                else:
-                    self.correlation_classifier = None
-                    
+
+                # Charger le pipeline (sigmoïde + top_k=None)
+                from transformers import pipeline, AutoConfig
+                hf_token = os.getenv("HF_TOKEN")
+                model_kwargs = {"token": hf_token} if hf_token else {}
+                self.correlation_classifier = pipeline(
+                    "text-classification",
+                    model=ML_MODELS_CONFIG["correlation"],
+                    device=device,
+                    top_k=None,                    # renvoyer tous les scores
+                    function_to_apply="sigmoid",   # multi-label
+                    truncation=True,
+                    **model_kwargs
+                )
+
+                # Si pas de mapping local, lire id2label du config HF
+                if not self.commodity_codes:
+                    try:
+                        cfg = AutoConfig.from_pretrained(ML_MODELS_CONFIG["correlation"], **model_kwargs)
+                        if hasattr(cfg, "id2label") and isinstance(cfg.id2label, dict):
+                            # ordonner par indice
+                            ids = sorted((int(k), v) for k, v in cfg.id2label.items())
+                            self.commodity_codes = [v for _, v in ids]
+                            logger.info(f"📑 id2label HF: {len(self.commodity_codes)} labels chargés")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Impossible de lire id2label HF: {e}")
+
+                logger.info("✅ Modèle corrélation ML chargé")
             except Exception as e:
                 logger.warning(f"⚠️ Pas de modèle corrélation ML: {e}")
                 self.correlation_classifier = None
@@ -253,48 +293,43 @@ class SmartNewsCollector:
             self.correlation_classifier = None
 
     def _predict_correlations_ml(self, text: str) -> List[str]:
-        """🔗 Prédit les corrélations avec le modèle ML"""
-        if not self.correlation_classifier or not self.commodity_codes:
+        """🔗 Prédit les corrélations avec seuil adaptatif pour viser ~3% d'articles positifs."""
+        if not self.correlation_classifier:
             return []
-        
+
         try:
-            # Tronquer le texte si nécessaire
-            text_truncated = text[:512]
-            
-            # Prédiction multi-label avec pipeline
-            predictions = self.correlation_classifier(text_truncated)
-            
-            correlations = []
-            
-            # 🔧 FIX: Gérer différents formats de sortie
-            if isinstance(predictions, list) and len(predictions) > 0:
-                # Format: [{'label': 'LABEL_0', 'score': 0.9}, ...]
-                for pred in predictions:
-                    # Extraire l'index du label
-                    label = pred.get('label', '')
-                    if label.startswith('LABEL_'):
-                        try:
-                            idx = int(label.replace('LABEL_', ''))
-                            if pred['score'] > 0.5 and idx < len(self.commodity_codes):
-                                correlations.append(self.commodity_codes[idx])
-                        except ValueError:
-                            pass
-            
-            # Si pas de corrélations et score très haut, prendre le top 1
-            if not correlations and predictions:
-                top_pred = max(predictions, key=lambda x: x['score'])
-                if top_pred['score'] > 0.7:
-                    label = top_pred.get('label', '')
-                    if label.startswith('LABEL_'):
-                        try:
-                            idx = int(label.replace('LABEL_', ''))
-                            if idx < len(self.commodity_codes):
-                                correlations.append(self.commodity_codes[idx])
-                        except ValueError:
-                            pass
-                            
-            return correlations
-            
+            preds = self.correlation_classifier(text, top_k=None)
+            # le pipeline peut renvoyer [[{...}]] ou [{...}]
+            if isinstance(preds, list) and preds and isinstance(preds[0], list):
+                preds = preds[0]
+
+            scores = [(p.get("label", ""), float(p.get("score", 0.0))) for p in preds]
+            # Tri décroissant par score
+            scores.sort(key=lambda x: x[1], reverse=True)
+
+            # seuil courant (vise ~3%)
+            T = self.corr_rate.current()
+
+            picked = [lab for lab, sc in scores if sc >= T]
+            # limiter le bruit
+            MAX_LABELS = 3
+            picked = picked[:MAX_LABELS]
+
+            # fallback: si rien et top score correct, sortir le top-1
+            if not picked and scores:
+                top_lab, top_sc = scores[0]
+                if top_sc >= max(0.40, T):
+                    picked = [top_lab]
+
+            # MàJ contrôleur (avons-nous prédit au moins un label ?)
+            self.corr_rate.update(bool(picked))
+
+            # Optionnel: filtrer par liste blanche si fournie
+            if self.commodity_codes:
+                picked = [lab for lab in picked if lab in self.commodity_codes]
+
+            return picked
+
         except Exception as e:
             logger.warning(f"⚠️ Erreur prédiction corrélations ML: {e}")
             return []
@@ -731,6 +766,7 @@ class SmartNewsCollector:
             logger.info(f"🎯 Modèle importance: {ML_MODELS_CONFIG['importance']}")
             if self.correlation_classifier:
                 logger.info(f"🔗 Modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
+            logger.info(f"🔧 Seuil corrélation initial: {self.corr_rate.current():.3f}")
         
         if CORRELATOR_AVAILABLE and not self.correlation_classifier:
             logger.info(f"🔗 Détection des corrélations commodités par règles (fallback)")
@@ -765,6 +801,11 @@ class SmartNewsCollector:
             needs_review_count = sum(1 for article in articles if article.get("needs_review", False))
             high_confidence_count = len(articles) - needs_review_count
             logger.info(f"🎯 Articles haute confiance PRODUIT: {high_confidence_count}/{len(articles)}")
+
+        if hasattr(self, "corr_rate"):
+            rate = (self.corr_rate.pos / max(1, self.corr_rate.n)) * 100.0
+            logger.info(f"📈 Taux d'articles avec ≥1 corrélation prédite: {rate:.2f}% (cible 3%)")
+            logger.info(f"🔧 Seuil corrélation final: {self.corr_rate.current():.3f}")
 
         return self.save_dataset(articles, output_file)
 
