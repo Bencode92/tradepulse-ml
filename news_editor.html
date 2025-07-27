@@ -17,8 +17,8 @@
         display: none;
         position: absolute;
         background-color: rgba(30, 41, 59, 0.95);
-        min-width: 300px;
-        max-height: 400px;
+        min-width: 360px;
+        max-height: 420px;
         overflow-y: auto;
         box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
         z-index: 1000;
@@ -494,6 +494,23 @@
         statusSpan.textContent = `Ligne ${rowIndex + 1}: corrélations mises à jour`;
       };
 
+      // Clear all correlations
+      window.clearCorrelations = function(rowIndex) {
+        rows[rowIndex].correlations = '';
+
+        // décoche toutes les cases du dropdown de cette ligne
+        const dropdown = document.querySelector(`.correlation-dropdown[data-row="${rowIndex}"]`);
+        if (dropdown) {
+          dropdown.querySelectorAll('.correlation-checkbox').forEach(cb => cb.checked = false);
+          dropdown.querySelectorAll('.correlation-option').forEach(opt => opt.classList.remove('selected'));
+          const btn = dropdown.querySelector('.correlation-dropdown-button');
+          if (btn) btn.textContent = `📊 Sélectionner corrélations (0)`;
+        }
+
+        updateStats();
+        statusSpan.textContent = `Ligne ${rowIndex + 1}: corrélations vidées`;
+      };
+
       // Close dropdowns when clicking outside
       document.addEventListener('click', function(event) {
         if (!event.target.closest('.correlation-dropdown')) {
@@ -694,15 +711,12 @@
               const corrs = (row.correlations || '').split(';').filter(c => c.trim());
               html += `
                 <td class="px-4 py-3">
-                  <div class="flex items-center gap-2">
-                    <div class="flex flex-wrap gap-1">
-                      ${corrs.map(corr => {
-                        const [country, product] = corr.split(':');
-                        const flag = COUNTRY_FLAGS[country] || '🌍';
-                        return `<span class="px-2 py-1 text-xs bg-purple-500/20 text-purple-300 rounded border border-purple-500/30">${flag} ${country}:${product || '?'}</span>`;
-                      }).join('')}
-                    </div>
+                  <div class="flex items-center gap-3">
                     ${createCorrelationDropdown(rIdx)}
+                    <span class="text-xs text-purple-300">${corrs.length} sélection(s)</span>
+                    <button title="Vider"
+                            class="text-slate-400 hover:text-red-400 transition"
+                            onclick="clearCorrelations(${rIdx})">🗑️</button>
                   </div>
                 </td>`;
             } else {
@@ -992,7 +1006,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 HTML avec multi-select corrélations chargé');
+        console.log('🔧 HTML simplifié - dropdown seul pour corrélations');
       });
     </script>
   </body>
