@@ -36,6 +36,9 @@ logger = logging.getLogger("smart-collector")
 # Fuseau horaire Paris
 PARIS_TZ = zoneinfo.ZoneInfo("Europe/Paris")
 
+# 🔧 FIX: Ajouter le chemin parent pour les imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Import CommodityCorrelator
 try:
     # Essayer d'importer depuis stock-analysis-platform
@@ -130,6 +133,7 @@ class SmartNewsCollector:
         self.sentiment_classifier = None
         self.importance_classifier = None
         self.correlation_classifier = None  # Nouveau modèle ML
+        self.commodity_codes = []  # 🔧 FIX: Initialiser vide
         
         # Commodity Correlator (fallback)
         self.correlator = CommodityCorrelator() if CORRELATOR_AVAILABLE else None
@@ -215,16 +219,8 @@ class SmartNewsCollector:
             # 3. Modèle corrélation ML (NOUVEAU)
             try:
                 logger.info(f"🔗 Chargement modèle corrélation ML: {ML_MODELS_CONFIG['correlation']}")
-                self.correlation_classifier = pipeline(
-                    "text-classification",
-                    model=ML_MODELS_CONFIG["correlation"],
-                    device=device,
-                    top_k=None,  # Retourner tous les scores
-                    **model_kwargs
-                )
-                logger.info("✅ Modèle corrélation ML chargé")
                 
-                # Charger le mapping des commodités
+                # 🔧 FIX: Charger d'abord le mapping
                 try:
                     from config.correlation_mapping import COMMODITY_CODES
                     self.commodity_codes = COMMODITY_CODES
@@ -232,6 +228,18 @@ class SmartNewsCollector:
                 except ImportError:
                     logger.warning("⚠️ correlation_mapping.py non trouvé")
                     self.commodity_codes = []
+                
+                # Charger le modèle seulement si on a les codes
+                if self.commodity_codes:
+                    self.correlation_classifier = pipeline(
+                        "text-classification",
+                        model=ML_MODELS_CONFIG["correlation"],
+                        device=device,
+                        top_k=None,  # Retourner tous les scores
+                        **model_kwargs
+                    )
+                    logger.info("✅ Modèle corrélation ML chargé")
+                else:
                     self.correlation_classifier = None
                     
             except Exception as e:
@@ -253,15 +261,38 @@ class SmartNewsCollector:
             # Tronquer le texte si nécessaire
             text_truncated = text[:512]
             
-            # Prédiction multi-label
+            # Prédiction multi-label avec pipeline
             predictions = self.correlation_classifier(text_truncated)
             
-            # Extraire les corrélations avec score > 0.5
             correlations = []
-            for i, pred in enumerate(predictions):
-                if pred['score'] > 0.5 and i < len(self.commodity_codes):
-                    correlations.append(self.commodity_codes[i])
             
+            # 🔧 FIX: Gérer différents formats de sortie
+            if isinstance(predictions, list) and len(predictions) > 0:
+                # Format: [{'label': 'LABEL_0', 'score': 0.9}, ...]
+                for pred in predictions:
+                    # Extraire l'index du label
+                    label = pred.get('label', '')
+                    if label.startswith('LABEL_'):
+                        try:
+                            idx = int(label.replace('LABEL_', ''))
+                            if pred['score'] > 0.5 and idx < len(self.commodity_codes):
+                                correlations.append(self.commodity_codes[idx])
+                        except ValueError:
+                            pass
+            
+            # Si pas de corrélations et score très haut, prendre le top 1
+            if not correlations and predictions:
+                top_pred = max(predictions, key=lambda x: x['score'])
+                if top_pred['score'] > 0.7:
+                    label = top_pred.get('label', '')
+                    if label.startswith('LABEL_'):
+                        try:
+                            idx = int(label.replace('LABEL_', ''))
+                            if idx < len(self.commodity_codes):
+                                correlations.append(self.commodity_codes[idx])
+                        except ValueError:
+                            pass
+                            
             return correlations
             
         except Exception as e:
