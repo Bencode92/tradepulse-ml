@@ -121,6 +121,93 @@ jobs:
         echo "  Count: $COUNT" 
         echo "  Days: $DAYS"
 
+    - name: ✅ Smoke test HF model (correlations)
+      if: env.SOURCE == 'fmp'
+      env:
+        HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      run: |
+        python - <<'PY'
+        import os, sys
+        from transformers import AutoConfig, pipeline
+        from transformers.utils import logging as hf_logging
+        hf_logging.set_verbosity_info()
+
+        MODEL="Bencode92/tradepulse-finbert-correlations"
+        print("MODEL =", MODEL)
+        print("HF_TOKEN set:", bool(os.getenv("HF_TOKEN")))
+
+        try:
+            # 1) Config (vérifie accès + id2label)
+            print("\n1️⃣ Loading AutoConfig...")
+            cfg = AutoConfig.from_pretrained(MODEL, token=os.getenv("HF_TOKEN"))
+            print("✅ Config loaded")
+            print("  num_labels:", cfg.num_labels)
+            print("  problem_type:", getattr(cfg, "problem_type", None))
+            print("  has id2label:", isinstance(getattr(cfg, "id2label", None), dict))
+            if hasattr(cfg, "id2label") and isinstance(cfg.id2label, dict):
+                print("  id2label sample:", list(cfg.id2label.items())[:3])
+
+            # 2) Pipeline (télécharge les poids)
+            print("\n2️⃣ Loading pipeline...")
+            clf = pipeline(
+                "text-classification",
+                model=MODEL,
+                top_k=None,
+                function_to_apply="sigmoid",
+                truncation=True,
+                token=os.getenv("HF_TOKEN"),
+                device=-1  # Force CPU in CI
+            )
+            print("✅ Pipeline loaded")
+            
+            # 3) Test prediction
+            print("\n3️⃣ Testing prediction...")
+            test_text = "Oil output cuts in OPEC tighten global supply."
+            out = clf(test_text)
+            
+            print(f"✅ Prediction successful")
+            print(f"  Output type: {type(out)}")
+            print(f"  Output length: {len(out) if isinstance(out, list) else 'N/A'}")
+            
+            # Show sample predictions
+            if isinstance(out, list) and out:
+                if isinstance(out[0], list):
+                    # Handle nested list
+                    print("  Format: nested list (top_k format)")
+                    sample = out[0][:3] if out[0] else []
+                else:
+                    # Handle flat list
+                    print("  Format: flat list")
+                    sample = out[:3]
+                
+                print("  Sample predictions:")
+                for pred in sample:
+                    if isinstance(pred, dict):
+                        label = pred.get('label', 'N/A')
+                        score = pred.get('score', 0)
+                        print(f"    - {label}: {score:.4f}")
+            
+            print("\n✅ All smoke tests passed! Model is accessible and functional.")
+            
+        except Exception as e:
+            print(f"\n❌ Smoke test failed: {type(e).__name__}: {e}")
+            print("\n💡 Debug info:")
+            print(f"  - Model ID: {MODEL}")
+            print(f"  - HF_TOKEN present: {bool(os.getenv('HF_TOKEN'))}")
+            print(f"  - Error type: {type(e).__name__}")
+            print(f"  - Error message: {str(e)}")
+            
+            # Common error explanations
+            if "401" in str(e) or "Unauthorized" in str(e):
+                print("\n🔐 Authentication issue: Check HF_TOKEN has access to the model")
+            elif "404" in str(e) or "not found" in str(e):
+                print("\n🔍 Model not found: Check model ID or if it's private")
+            elif "safetensors" in str(e):
+                print("\n📦 Model weights issue: Model might not be fully uploaded")
+            
+            sys.exit(1)
+        PY
+
     - name: 📰 Collect News Dataset with Custom ML Model
       id: collect
       env:
