@@ -136,7 +136,7 @@ jobs:
 
   finetune:
     runs-on: ubuntu-latest
-    timeout-minutes: 120  # 2 heures max
+    timeout-minutes: 400  # 2 heures max
     needs: check-prerequisites
     if: needs.check-prerequisites.outputs.should-run == 'true'
     
