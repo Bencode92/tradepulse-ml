@@ -19,7 +19,7 @@ on:
       dataset:
         description: 'Dataset filename (in datasets/ folder)'
         required: true
-        default: 'auto-latest'
+        default: 'base_reference.csv'
         type: string
       
       mode:
@@ -204,14 +204,12 @@ jobs:
           LEARNING_RATE="${{ github.event.inputs.learning_rate }}"
           FORCE_UPDATE="${{ github.event.inputs.force_update }}"
         else
-          # Auto-trigger: sélectionner le dernier dataset modifié
-          DATASET_FILE=$(find datasets/ -name "*.csv" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2- | xargs basename)
-          if [ -z "$DATASET_FILE" ]; then
-            echo "❌ No suitable dataset found"
+          # Auto-trigger : ON FORCE la référence de base
+          DATASET="base_reference.csv"
+          if [ ! -f "datasets/$DATASET" ]; then
+            echo "❌ datasets/$DATASET not found"
             exit 1
           fi
-          
-          DATASET="$DATASET_FILE"
           EPOCHS="3"
           LEARNING_RATE="2e-5"
           FORCE_UPDATE="true"
@@ -535,6 +533,7 @@ jobs:
         echo "  ✅ Job-level HF_TOKEN"
         echo "  ✅ Multi-label dimensions fix"
         echo "  ✅ No more os.chdir()"
+        echo "  ✅ ALWAYS uses base_reference.csv for auto-triggers"
         echo ""
         if [ "${{ steps.training.outputs.correlations-updated }}" = "true" ]; then
           echo "🌐 Correlations Model:"
