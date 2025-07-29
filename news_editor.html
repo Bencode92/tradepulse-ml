@@ -956,6 +956,7 @@
         }
       });
 
+      // 🔄 MODIFICATION : Double mise à jour (fichier actuel + base_reference.csv)
       pushGithubBtn.addEventListener('click', async () => {
         try {
           ghStatus.textContent = '📤 Commit en cours...';
@@ -963,16 +964,71 @@
           const csv = Papa.unparse(rows, { columns: headers });
           const b64 = btoa(unescape(encodeURIComponent(csv)));
           
-          const body = {
+          // 1️⃣ COMMIT NORMAL du fichier actuel
+          const body1 = {
             message: `Update ${currentFilename || 'dataset'} via web editor (${rows.length} lignes)`,
             content: b64,
             branch
           };
-          if (currentSha) body.sha = currentSha;
+          if (currentSha) body1.sha = currentSha;
           
-          const res = await githubRequest(`contents/datasets/${currentFilename}`, 'PUT', body);
-          currentSha = res.content.sha;
-          ghStatus.textContent = `✅ Commit ${res.commit.sha.slice(0,7)} poussé`;
+          const res1 = await githubRequest(`contents/datasets/${currentFilename}`, 'PUT', body1);
+          currentSha = res1.content.sha;
+          ghStatus.textContent = `✅ ${currentFilename} mis à jour`;
+          
+          // 2️⃣ FUSION DANS base_reference.csv
+          ghStatus.textContent = '🔄 Fusion dans base_reference.csv...';
+          
+          try {
+            // Récupérer base_reference.csv
+            const baseObj = await githubRequest(
+              `contents/datasets/base_reference.csv?ref=${branch}`
+            );
+            const baseCSV = atob(baseObj.content.replace(/\n/g, ''));
+            const baseRows = Papa.parse(baseCSV, { header: true }).data.map(row => ({
+              ...row,
+              label: normalizeSentiment(row.label || 'neutral'),
+              importance: normalizeImportance(row.importance || 'générale'),
+              correlations: row.correlations || ''
+            }));
+            
+            // Fusionner avec déduplication sur 'text'
+            const map = new Map();
+            [...baseRows, ...rows].forEach(r => {
+              if (r.text && r.text.trim()) {
+                map.set(r.text, r);
+              }
+            });
+            const merged = Array.from(map.values());
+            
+            // Commit base_reference.csv
+            const mergedCSV = Papa.unparse(merged, { columns: headers });
+            const body2 = {
+              message: `📝 Fusion dans base_reference.csv (+${merged.length - baseRows.length} lignes depuis ${currentFilename})`,
+              content: btoa(unescape(encodeURIComponent(mergedCSV))),
+              sha: baseObj.sha,
+              branch
+            };
+            
+            await githubRequest('contents/datasets/base_reference.csv', 'PUT', body2);
+            ghStatus.textContent = `✅ Tout mis à jour! ${currentFilename} + base_reference.csv (${merged.length} lignes total)`;
+            
+          } catch (err) {
+            // Si base_reference.csv n'existe pas, le créer
+            if (err.message.includes('404')) {
+              ghStatus.textContent = '📝 Création de base_reference.csv...';
+              const body3 = {
+                message: `Création base_reference.csv depuis ${currentFilename}`,
+                content: b64,
+                branch
+              };
+              await githubRequest('contents/datasets/base_reference.csv', 'PUT', body3);
+              ghStatus.textContent = `✅ base_reference.csv créé avec ${rows.length} lignes`;
+            } else {
+              ghStatus.textContent = `⚠️ ${currentFilename} mis à jour, mais fusion échouée: ${err.message}`;
+            }
+          }
+          
         } catch (err) {
           ghStatus.textContent = '❌ Erreur: ' + err.message;
           console.error(err);
@@ -1006,7 +1062,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 HTML simplifié - dropdown seul pour corrélations');
+        console.log('🔧 HTML avec double mise à jour - fichier actuel + base_reference.csv');
       });
     </script>
   </body>
