@@ -964,6 +964,12 @@
           const csv = Papa.unparse(rows, { columns: headers });
           const b64 = btoa(unescape(encodeURIComponent(csv)));
           
+          // 🔧 FIX: Si le fichier n'existe pas encore dans le repo, on lui donne un nom par date
+          if (!currentFilename) {
+            const today = new Date().toISOString().slice(0,10).replace(/-/g,'');
+            currentFilename = `news_${today}.csv`;
+          }
+          
           // 1️⃣ COMMIT NORMAL du fichier actuel
           const body1 = {
             message: `Update ${currentFilename || 'dataset'} via web editor (${rows.length} lignes)`,
@@ -1043,7 +1049,7 @@
           await githubRequest('actions/workflows/finetune-model.yml/dispatches', 'POST', {
             ref: branch,
             inputs: {
-              dataset: 'auto-latest',
+              dataset: 'base_reference.csv',  // 🔧 FIX: Utiliser base_reference.csv au lieu de auto-latest
               model_name: 'yiyanghkust/finbert-tone',
               epochs: '3',
               learning_rate: '2e-5',
