@@ -1,182 +1,99 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-TradePulse - Commodity Correlation Mapping
-Based on critical export exposures from the provided data
+Commodity correlation mapping for TradePulse ML
+Maps commodity codes to label indices for multi-label classification
 """
+import math
 
 COMMODITY_CODES = [
-    # Energy commodities
-    "US:PETROLEUM_CRUDE",    # Pétrole brut (US, RU, UAE)
-    "US:NATGAS",            # Gaz naturel (AU, NO, US)
-    "FR:ELECTRICITY",       # Électricité (FR)
-    
-    # Precious metals
-    "US:GOLD",              # Or (CH, GB)
-    "US:SILVER",            # Argent (CN, HK, GB)
-    
-    # Base metals
-    "UK:COPPER",            # Cuivre (CL, PE, CD)
-    "CN:IRON_ORE",          # Minerai de fer (AU, BR)
-    "CA:NICKEL",            # Nickel (CA, CN, NO)
-    "CA:ALUMINIUM",         # Aluminium (CA)
-    
-    # Agricultural - Grains
-    "US:WHEAT",             # Blé (AU, CA, US)
-    "US:SOYBEANS",          # Soja (BR, US)
-    
-    # Agricultural - Softs
-    "BR:COFFEE",            # Café (BR)
-    "BR:SUGAR",             # Sucre (BR)
-    "NL:COCOA",             # Cacao (DE, NL)
-    "FR:BEVERAGES",         # Boissons (FR)
-    
-    # Livestock & Food
-    "US:MEAT",              # Viande (BR, US)
-    "NO:FISH",              # Poisson (NO)
-    "MY:PALM_OIL",          # Huile de palme (ID, MY)
-    
-    # Manufacturing & Technology
-    "CN:APPAREL",           # Vêtements (CN)
-    "CN:MACHINERY",         # Machines (CN)
-    "CN:ELECTRICAL_MACHINERY",  # Machines électriques (CN, HK)
-    "CN:VEHICLES",          # Véhicules (CN, DE, US)
-    "CN:OPTICAL_INSTRUMENTS",   # Instruments optiques (CN, DE, US)
-    "FR:AIRCRAFT",          # Aéronefs (FR, DE)
-    
-    # Chemicals & Materials
-    "CN:CHEMICALS_ORGANIC", # Produits chimiques organiques (CN, US)
-    "CN:PLASTICS",          # Plastiques (CN, US)
-    "CH:PHARMACEUTICALS",   # Produits pharmaceutiques (CH, DE, US)
-    
-    # Services
-    "IN:IT_SERVICES",       # Services IT (IN)
-    "LU:FINANCIAL_SERVICES",    # Services financiers (FR, LU, SG)
-    "US:TRAVEL",            # Services de voyage (US)
-    
-    # Strategic
-    "KZ:URANIUM",           # Uranium (KZ)
+    "AU:IRON_ORE", "AU:WHEAT", "AU:NATGAS", "BR:COFFEE", "BR:SOYBEAN", 
+    "BR:SUGAR", "BR:IRON_ORE", "BR:MEAT", "CA:WHEAT", "CA:NICKEL_METAL", 
+    "CA:ALUMINIUM_METAL", "CL:COPPER_ORE", "CL:COPPER_REFINED", "CN:APPAREL", 
+    "CN:MACHINERY", "CN:ELECTRICAL_MACHINERY", "CN:SILVER", "CN:NICKEL_METAL", 
+    "CN:CHEMICALS_ORGANIC", "CN:PLASTICS", "CN:VEHICLES", "CN:OPTICAL_INSTRUMENTS", 
+    "CD:COPPER_REFINED", "FR:AIRCRAFT", "FR:ELECTRICITY", "FR:BEVERAGES", 
+    "FR:FINANCIAL_SERVICES", "DE:COCOA", "DE:PHARMACEUTICALS", "DE:VEHICLES", 
+    "DE:AIRCRAFT", "DE:OPTICAL_INSTRUMENTS", "HK:SILVER", "HK:ELECTRICAL_MACHINERY", 
+    "IN:IT_SERVICES", "ID:PALM_OIL", "LU:FINANCIAL_SERVICES", "MY:PALM_OIL", 
+    "NL:COCOA", "NO:NATGAS", "NO:NICKEL_METAL", "NO:FISH", "PE:COPPER_ORE", 
+    "RU:PETROLEUM_CRUDE", "SG:FINANCIAL_SERVICES", "CH:GOLD", "CH:PHARMACEUTICALS", 
+    "AE:PETROLEUM_CRUDE", "GB:SILVER", "GB:GOLD", "US:SOYBEAN", "US:WHEAT", 
+    "US:PETROLEUM_CRUDE", "US:NATGAS", "US:MEAT", "US:CHEMICALS_ORGANIC", 
+    "US:PHARMACEUTICALS", "US:PLASTICS", "US:OPTICAL_INSTRUMENTS", "US:TRAVEL", 
+    "KZ:URANIUM"
 ]
-
-# Mapping par catégories pour faciliter le filtrage
-CATEGORY_MAPPING = {
-    "energy": [
-        "US:PETROLEUM_CRUDE",
-        "US:NATGAS",
-        "FR:ELECTRICITY"
-    ],
-    "metals": [
-        "US:GOLD",
-        "US:SILVER", 
-        "UK:COPPER",
-        "CN:IRON_ORE",
-        "CA:NICKEL",
-        "CA:ALUMINIUM"
-    ],
-    "agriculture": [
-        "US:WHEAT",
-        "US:SOYBEANS",
-        "BR:COFFEE",
-        "BR:SUGAR",
-        "NL:COCOA",
-        "FR:BEVERAGES",
-        "US:MEAT",
-        "NO:FISH",
-        "MY:PALM_OIL"
-    ],
-    "manufacturing": [
-        "CN:APPAREL",
-        "CN:MACHINERY",
-        "CN:ELECTRICAL_MACHINERY",
-        "CN:VEHICLES",
-        "CN:OPTICAL_INSTRUMENTS",
-        "FR:AIRCRAFT"
-    ],
-    "chemicals": [
-        "CN:CHEMICALS_ORGANIC",
-        "CN:PLASTICS",
-        "CH:PHARMACEUTICALS"
-    ],
-    "services": [
-        "IN:IT_SERVICES",
-        "LU:FINANCIAL_SERVICES",
-        "US:TRAVEL"
-    ],
-    "strategic": [
-        "KZ:URANIUM"
-    ]
-}
-
-# Mapping des pays principaux par commodité (basé sur impact "pivot" et "major")
-PIVOT_EXPORTERS = {
-    # Energy
-    "US:PETROLEUM_CRUDE": ["US", "RU", "AE"],
-    "US:NATGAS": ["AU", "NO", "US"],
-    "FR:ELECTRICITY": ["FR"],
-    
-    # Precious metals
-    "US:GOLD": ["CH", "GB"],
-    "US:SILVER": ["CN", "HK", "GB"],
-    
-    # Base metals
-    "UK:COPPER": ["CL", "PE", "CD"],
-    "CN:IRON_ORE": ["AU", "BR"],
-    "CA:NICKEL": ["CA", "CN", "NO"],
-    "CA:ALUMINIUM": ["CA"],
-    
-    # Agricultural
-    "US:WHEAT": ["AU", "CA", "US"],
-    "US:SOYBEANS": ["BR", "US"],
-    "BR:COFFEE": ["BR"],
-    "BR:SUGAR": ["BR"],
-    "NL:COCOA": ["DE", "NL"],
-    "FR:BEVERAGES": ["FR"],
-    "US:MEAT": ["BR", "US"],
-    "NO:FISH": ["NO"],
-    "MY:PALM_OIL": ["ID", "MY"],
-    
-    # Manufacturing
-    "CN:APPAREL": ["CN"],
-    "CN:MACHINERY": ["CN"],
-    "CN:ELECTRICAL_MACHINERY": ["CN", "HK"],
-    "CN:VEHICLES": ["CN", "DE", "US"],
-    "CN:OPTICAL_INSTRUMENTS": ["CN", "DE", "US"],
-    "FR:AIRCRAFT": ["FR", "DE"],
-    
-    # Chemicals
-    "CN:CHEMICALS_ORGANIC": ["CN", "US"],
-    "CN:PLASTICS": ["CN", "US"],
-    "CH:PHARMACEUTICALS": ["CH", "DE", "US"],
-    
-    # Services
-    "IN:IT_SERVICES": ["IN"],
-    "LU:FINANCIAL_SERVICES": ["FR", "LU", "SG"],
-    "US:TRAVEL": ["US"],
-    
-    # Strategic
-    "KZ:URANIUM": ["KZ"]
-}
-
-# Impact des scénarios de crise
-CRISIS_IMPACT = {
-    # Prix en HAUSSE
-    "price_increase": [
-        "CN:IRON_ORE", "US:WHEAT", "US:NATGAS", "BR:COFFEE", "US:SOYBEANS",
-        "BR:SUGAR", "US:MEAT", "CA:NICKEL", "CA:ALUMINIUM", "UK:COPPER",
-        "US:SILVER", "CN:CHEMICALS_ORGANIC", "FR:ELECTRICITY", "FR:BEVERAGES",
-        "NL:COCOA", "MY:PALM_OIL", "NO:FISH", "US:PETROLEUM_CRUDE", "US:GOLD"
-    ],
-    # Prix en BAISSE
-    "price_decrease": [
-        "CN:APPAREL", "CN:MACHINERY", "CN:ELECTRICAL_MACHINERY", "CN:PLASTICS",
-        "CN:VEHICLES", "CN:OPTICAL_INSTRUMENTS", "FR:AIRCRAFT", "LU:FINANCIAL_SERVICES",
-        "CH:PHARMACEUTICALS", "IN:IT_SERVICES", "US:TRAVEL", "KZ:URANIUM"
-    ]
-}
 
 # Create reverse mapping for quick lookup
 COMMODITY_TO_INDEX = {code: idx for idx, code in enumerate(COMMODITY_CODES)}
+
+def correlations_to_labels(correlation_string):
+    """
+    Convert correlation string to binary label array
+    
+    Args:
+        correlation_string: String like "US:WHEAT,CN:STEEL,AU:IRON_ORE" or "US:WHEAT;CN:STEEL;AU:IRON_ORE"
+        
+    Returns:
+        List of 0.0s and 1.0s matching COMMODITY_CODES indices (floats for BCELoss)
+    """
+    # Handle NaN and None values
+    if correlation_string is None or (
+        isinstance(correlation_string, float) and math.isnan(correlation_string)
+    ):
+        return [0.0] * len(COMMODITY_CODES)
+    
+    # Convert to string if not already
+    if not isinstance(correlation_string, str):
+        correlation_string = str(correlation_string)
+    
+    # Handle empty strings and 'nan' string
+    if correlation_string.strip().lower() in {"", "nan"}:
+        return [0.0] * len(COMMODITY_CODES)
+    
+    # Support both , and ; as separators
+    if ';' in correlation_string:
+        correlations = [c.strip() for c in correlation_string.split(';') if c.strip()]
+    else:
+        correlations = [c.strip() for c in correlation_string.split(',') if c.strip()]
+    
+    labels = [0.0] * len(COMMODITY_CODES)
+    
+    for correlation in correlations:
+        if correlation in COMMODITY_TO_INDEX:
+            labels[COMMODITY_TO_INDEX[correlation]] = 1.0
+    
+    return labels
+
+def labels_to_correlations(labels):
+    """
+    Convert binary label array back to correlation string
+    
+    Args:
+        labels: List of 0s and 1s or probabilities
+        
+    Returns:
+        String like "US:WHEAT,CN:STEEL"
+    """
+    threshold = 0.5 if any(0 < l < 1 for l in labels) else 0.5
+    
+    correlations = [
+        COMMODITY_CODES[i] 
+        for i, label in enumerate(labels) 
+        if label > threshold
+    ]
+    
+    return ','.join(correlations) if correlations else ''
+
+def get_commodity_name(code):
+    """Extract commodity name from code"""
+    if ':' in code:
+        return code.split(':')[1]
+    return code
+
+def get_country_code(code):
+    """Extract country code from commodity code"""
+    if ':' in code:
+        return code.split(':')[0]
+    return ''
 
 # Total number of unique commodity labels
 NUM_CORRELATION_LABELS = len(COMMODITY_CODES)
