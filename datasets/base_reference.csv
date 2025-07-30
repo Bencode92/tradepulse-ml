@@ -1369,7 +1369,6 @@ Coinbase Premium Turns Negative! Is U.S. Demand for Bitcoin Collapsing?. The cry
 "Government sets 30‑day compliance window for new e‑invoice system",neutral,générale,IN:IT_SERVICES
 "Visa backlog tops 1 million, creating uncertainty for Indian IT workers in US",negative,générale,IN:IT_SERVICES
 "GenAI productivity gains could cut 100 000 low‑end coding jobs by 2027",negative,importante,IN:IT_SERVICES
-```csv
 "US proposes 15 % tariff on Chinese construction‑equipment imports amid trade spat",negative,critique,CN:MACHINERY
 "China’s excavator exports surge 9 % YoY in H1 2025 on strong ASEAN demand",positive,importante,CN:MACHINERY
 "Beijing issues new diesel‑emission standards for off‑road machinery effective 2027",negative,importante,CN:MACHINERY
@@ -1536,7 +1535,6 @@ Coinbase Premium Turns Negative! Is U.S. Demand for Bitcoin Collapsing?. The cry
 "Tromsø University study links Arctic warming to mine infrastructure risks, urges mitigation",neutral,générale,NO:NICKEL_METAL
 "Vale, Tsingshan, and Glencore form research consortium on low‑carbon matte",positive,générale,CA:NICKEL_METAL;CN:NICKEL_METAL
 "EU lifts safeguard quota on Norwegian nickel plates, boosting European imports",positive,générale,NO:NICKEL_METAL
-```csv
 "US imposes 12 % anti‑dumping duty on Chinese telescope lenses citing market distortion",negative,critique,CN:OPTICAL_INSTRUMENTS;US:OPTICAL_INSTRUMENTS
 "German optics giant Zeiss unveils €300 million expansion of Oberkochen wafer‑inspection plant",positive,importante,DE:OPTICAL_INSTRUMENTS
 "Chinese exports of machine‑vision cameras rise 9 % YoY on booming ASEAN electronics demand",positive,importante,CN:OPTICAL_INSTRUMENTS
@@ -1998,6 +1996,7 @@ Coinbase Premium Turns Negative! Is U.S. Demand for Bitcoin Collapsing?. The cry
 "Canadian grain shipping rates on St. Lawrence Seaway fall 8 % after pilotage fee cut",positive,générale,CA:WHEAT
 "Severe storm damages port conveyor at Geraldton; Australian wheat loadings delayed 72 h",negative,critique,AU:WHEAT
 "US HRW protein premiums widen to 80 ¢ / bu on quality‑crop concerns",positive,générale,US:WHEAT
+
 
 
 
