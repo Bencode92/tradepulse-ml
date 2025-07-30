@@ -203,55 +203,34 @@
     </div>
 
     <script>
-      // Liste complète des corrélations possibles
+      // Liste complète des corrélations possibles (RÉDUITE de 83 à 59)
       const ALL_CORRELATIONS = [
-        "AE:DIAMONDS", "AE:PETROLEUM_CRUDE",
-        "AR:CORN",
-        "AU:ALUMINIUM_ORE", "AU:COAL", "AU:IRON_ORE", "AU:NATGAS", "AU:WHEAT", "AU:ZINC_ORE",
-        "BE:ZINC_METAL",
-        "BO:ZINC_ORE",
-        "BR:COFFEE", "BR:CORN", "BR:IRON_ORE", "BR:MEAT", "BR:SOYBEAN", "BR:SUGAR",
-        "CA:ALUMINIUM_METAL", "CA:NICKEL_METAL", "CA:WHEAT",
+        "AU:IRON_ORE", "AU:WHEAT", "AU:NATGAS",
+        "BR:COFFEE", "BR:SOYBEANS", "BR:SUGAR", "BR:IRON_ORE", "BR:MEAT",
+        "CA:WHEAT", "CA:NICKEL", "CA:ALUMINIUM",
         "CD:COPPER_REFINED",
         "CH:GOLD", "CH:PHARMACEUTICALS",
-        "CL:COPPER_ORE", "CL:COPPER_REFINED", "CL:COPPER_UNREFINED",
-        "CN:APPAREL", "CN:CARBON", "CN:CHEMICALS_MISC", "CN:CHEMICALS_ORGANIC", "CN:ELECTRICAL_MACHINERY", 
-        "CN:FURNITURE", "CN:MACHINERY", "CN:NICKEL_METAL", "CN:OPTICAL_INSTRUMENTS", "CN:PAPER", 
-        "CN:PLASTICS", "CN:RARE_GASES", "CN:RUBBER", "CN:SHIPS", "CN:SILVER", "CN:TOYS", "CN:VEHICLES", "CN:WOOD",
-        "DE:AIRCRAFT", "DE:CHEMICALS_MISC", "DE:COCOA", "DE:FINANCIAL_SERVICES", "DE:OPTICAL_INSTRUMENTS", 
-        "DE:PAPER", "DE:PHARMACEUTICALS", "DE:RARE_GASES", "DE:VEHICLES",
-        "FI:NICKEL_ORE",
-        "FR:AIRCRAFT", "FR:BEVERAGES", "FR:COSMETICS", "FR:ELECTRICITY", "FR:FINANCIAL_SERVICES",
-        "GB:GOLD", "GB:PLATINUM", "GB:SILVER",
-        "GN:ALUMINIUM_ORE",
-        "HK:DIAMONDS", "HK:ELECTRICAL_MACHINERY", "HK:SILVER",
-        "ID:COAL", "ID:FERROALLOYS", "ID:PALM_OIL", "ID:TIN",
-        "IN:DIAMONDS", "IN:IT_SERVICES", "IN:RICE",
-        "KR:SHIPS",
+        "CL:COPPER_ORE", "CL:COPPER_REFINED",
+        "CN:APPAREL", "CN:MACHINERY", "CN:ELECTRICAL_MACHINERY", "CN:SILVER", "CN:NICKEL", 
+        "CN:CHEMICALS_ORGANIC", "CN:PLASTICS", "CN:VEHICLES", "CN:OPTICAL_INSTRUMENTS",
+        "DE:COCOA", "DE:PHARMACEUTICALS", "DE:VEHICLES", "DE:AIRCRAFT", "DE:OPTICAL_INSTRUMENTS",
+        "FR:AIRCRAFT", "FR:ELECTRICITY", "FR:BEVERAGES", "FR:FINANCIAL_SERVICES",
+        "GB:SILVER", "GB:GOLD",
+        "HK:SILVER", "HK:ELECTRICAL_MACHINERY",
+        "ID:PALM_OIL",
+        "IN:IT_SERVICES",
         "KZ:URANIUM",
         "LU:FINANCIAL_SERVICES",
-        "MX:LEAD_ORE", "MX:PRECIOUS_METALS_ORE",
         "MY:PALM_OIL",
-        "NA:URANIUM",
-        "NG:URANIUM",
         "NL:COCOA",
-        "NO:FISH", "NO:NATGAS", "NO:NICKEL_METAL",
-        "PK:RICE",
-        "PE:COPPER_ORE", "PE:LEAD_ORE", "PE:PRECIOUS_METALS_ORE", "PE:TIN", "PE:ZINC_ORE",
-        "PH:NICKEL_ORE",
-        "QA:NATGAS",
-        "RU:COAL", "RU:PETROLEUM_CRUDE", "RU:PRECIOUS_METALS_ORE", "RU:WHEAT",
-        "SE:COPPER_UNREFINED",
+        "NO:NATGAS", "NO:NICKEL", "NO:FISH",
+        "PE:COPPER_ORE",
+        "RU:PETROLEUM_CRUDE",
         "SG:FINANCIAL_SERVICES",
-        "TH:RICE",
-        "UA:CORN",
-        "US:CHEMICALS_MISC", "US:CHEMICALS_ORGANIC", "US:CORN", "US:DIAMONDS", "US:EDIBLE_FRUITS", 
-        "US:LEAD_ORE", "US:MEAT", "US:NATGAS", "US:OPTICAL_INSTRUMENTS", "US:PETROLEUM_CRUDE", 
-        "US:PETROLEUM_REFINED", "US:PHARMACEUTICALS", "US:PLASTICS", "US:PLATINUM", "US:RARE_GASES", 
-        "US:SOYBEAN", "US:TRAVEL", "US:WHEAT", "US:ZINC_ORE",
-        "VN:FOOTWEAR", "VN:RICE",
-        "ZA:FERROALLOYS", "ZA:PLATINUM",
-        "ZM:COPPER_UNREFINED"
+        "AE:PETROLEUM_CRUDE",
+        "US:SOYBEANS", "US:WHEAT", "US:PETROLEUM_CRUDE", "US:NATGAS", "US:MEAT",
+        "US:CHEMICALS_ORGANIC", "US:PHARMACEUTICALS", "US:PLASTICS", 
+        "US:OPTICAL_INSTRUMENTS", "US:TRAVEL"
       ];
 
       // Mapping des codes produits vers labels français
@@ -275,7 +254,8 @@
         "RICE": "Riz", "URANIUM": "Uranium", "LEAD_ORE": "Minerai de plomb",
         "PRECIOUS_METALS_ORE": "Minerais de métaux précieux", "FISH": "Poisson",
         "PETROLEUM_REFINED": "Pétrole raffiné", "EDIBLE_FRUITS": "Fruits comestibles",
-        "TRAVEL": "Services de voyage", "FOOTWEAR": "Chaussures"
+        "TRAVEL": "Services de voyage", "FOOTWEAR": "Chaussures",
+        "SOYBEANS": "Soja", "NICKEL": "Nickel", "ALUMINIUM": "Aluminium"
       };
 
       // Country flags
@@ -1068,7 +1048,7 @@
       document.addEventListener('DOMContentLoaded', () => {
         ghRepoInp.value = 'Bencode92/tradepulse-ml';
         updateDebugInfo();
-        console.log('🔧 HTML avec double mise à jour - fichier actuel + base_reference.csv');
+        console.log('🔧 HTML avec réduction des corrélations de 83 à 59');
       });
     </script>
   </body>
