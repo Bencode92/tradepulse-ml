@@ -4,6 +4,7 @@
 Incremental Fine-tuning with LoRA for TradePulse ML
 Supports sentiment and importance classification with gating
 Fixed for DistilBERT and proper TrainingArguments
+Enhanced with merge_lora option and robust error handling
 """
 import os
 import json
@@ -78,6 +79,42 @@ def compute_metrics(eval_pred):
         "precision_weighted": precision,
         "recall_weighted": recall
     }
+
+
+def make_training_args(output_dir, args):
+    """Create TrainingArguments with compatibility for different versions"""
+    base = dict(
+        output_dir=output_dir,
+        num_train_epochs=args.epochs,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        learning_rate=args.learning_rate,
+        warmup_steps=min(args.warmup_steps, 10),
+        weight_decay=args.weight_decay,
+        logging_dir=f"{output_dir}/logs",
+        logging_steps=10,
+        eval_steps=50,
+        save_steps=50,
+        report_to="none",
+        save_total_limit=2,
+        fp16=False,
+        gradient_checkpointing=False,
+        remove_unused_columns=True,
+        label_names=["labels"],
+        push_to_hub=False,  # We handle this manually
+    )
+    try:
+        return TrainingArguments(
+            evaluation_strategy="steps",
+            save_strategy="steps",
+            load_best_model_at_end=True,
+            metric_for_best_model="f1_macro",
+            greater_is_better=True,
+            **base,
+        )
+    except TypeError:
+        print("⚠️ TrainingArguments sans evaluation_strategy (compat mode)")
+        return TrainingArguments(**base)
 
 
 def load_or_create_model(model_name, num_labels, id2label, label2id, incremental=False, 
@@ -183,6 +220,8 @@ def main():
                         help="Classification task")
     parser.add_argument("--incremental", action="store_true",
                         help="Enable incremental learning with LoRA")
+    parser.add_argument("--merge_lora", action="store_true",
+                        help="Merge LoRA adapters into base model before pushing (push full model)")
     
     # Data arguments
     parser.add_argument("--dataset", required=True,
@@ -315,33 +354,8 @@ def main():
         lora_dropout=args.lora_dropout
     )
     
-    # Training arguments - Fixed to match evaluation and save strategies
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch_size,
-        per_device_eval_batch_size=args.batch_size,
-        learning_rate=args.learning_rate,
-        warmup_steps=min(args.warmup_steps, 10),  # Reduce for small datasets
-        weight_decay=args.weight_decay,
-        logging_dir=f"{output_dir}/logs",
-        logging_steps=10,
-        # Match evaluation and save strategies
-        evaluation_strategy="steps",
-        save_strategy="steps",
-        eval_steps=50,
-        save_steps=50,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1_macro",
-        greater_is_better=True,
-        report_to="none",
-        push_to_hub=False,  # We handle this manually
-        save_total_limit=2,
-        fp16=False,  # Disable for CPU
-        gradient_checkpointing=False,  # Disable for small models
-        remove_unused_columns=True,
-        label_names=["labels"],
-    )
+    # Training arguments - Using the robust helper function
+    training_args = make_training_args(output_dir, args)
     
     # Create trainer
     trainer = Trainer(
@@ -385,7 +399,7 @@ def main():
             if isinstance(value, float):
                 print(f"   {key}: {value:.4f}")
         
-        # Check quality gate
+        # Check quality gate and push to hub
         if args.hf_repo:
             ok_to_push = check_metrics_gate(
                 eval_metrics, 
@@ -402,20 +416,35 @@ def main():
                 
                 # Push to hub
                 try:
-                    if args.incremental:
-                        # For LoRA models, push as a new revision
+                    if args.incremental and not args.merge_lora:
+                        # Push only LoRA adapters
                         model.push_to_hub(
                             args.hf_repo,
-                            commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
+                            commit_message=f"Update {args.task} adapters - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
                         )
+                        print(f"✅ LoRA adapters pushed to {args.hf_repo}")
                     else:
-                        # For full models
+                        # Push full model (merge if LoRA)
+                        if args.incremental and args.merge_lora:
+                            try:
+                                model = model.merge_and_unload()
+                                trainer.model = model
+                                print("✅ LoRA merged into base model")
+                            except Exception as e:
+                                print(f"⚠️ Merge LoRA failed, pushing adapters instead: {e}")
+                                model.push_to_hub(
+                                    args.hf_repo,
+                                    commit_message=f"Update {args.task} adapters (merge failed) - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
+                                )
+                                raise SystemExit(0)
+                        
+                        # Push full model
                         trainer.push_to_hub(
                             repo_id=args.hf_repo,
-                            commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
+                            commit_message=f"Update {args.task} full model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
                         )
+                        print(f"✅ Full model pushed to {args.hf_repo}")
                     
-                    print(f"✅ Model pushed to {args.hf_repo}")
                 except Exception as e:
                     print(f"⚠️ Could not push to HuggingFace: {e}")
             else:
