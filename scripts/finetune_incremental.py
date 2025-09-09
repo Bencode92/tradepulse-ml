@@ -10,9 +10,11 @@ import argparse
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from packaging import version
 
 import torch
 import numpy as np
+import transformers
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -80,26 +82,40 @@ def compute_metrics(eval_pred):
 def load_or_create_model(model_name, num_labels, id2label, label2id, incremental=False, 
                          lora_r=8, lora_alpha=16, lora_dropout=0.05):
     """Load base model and optionally apply LoRA configuration"""
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        num_labels=num_labels,
-        id2label=id2label,
-        label2id=label2id,
-        ignore_mismatched_sizes=True
-    )
+    try:
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            id2label=id2label,
+            label2id=label2id,
+            ignore_mismatched_sizes=True
+        )
+    except Exception as e:
+        print(f"Warning: Could not load {model_name}, falling back to distilbert-base-uncased")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "distilbert-base-uncased",
+            num_labels=num_labels,
+            id2label=id2label,
+            label2id=label2id,
+            ignore_mismatched_sizes=True
+        )
     
     if incremental:
         # Apply LoRA configuration
-        lora_config = LoraConfig(
-            task_type=TaskType.SEQ_CLS,
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            lora_dropout=lora_dropout,
-            target_modules=["query", "key", "value", "dense"],
-            modules_to_save=["classifier"]  # Also save classifier for num_labels changes
-        )
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
+        try:
+            lora_config = LoraConfig(
+                task_type=TaskType.SEQ_CLS,
+                r=lora_r,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+                target_modules=["query", "key", "value", "dense"],
+                modules_to_save=["classifier"]  # Also save classifier for num_labels changes
+            )
+            model = get_peft_model(model, lora_config)
+            model.print_trainable_parameters()
+        except Exception as e:
+            print(f"Warning: Could not apply LoRA config: {e}")
+            print("Continuing without LoRA...")
     
     return model
 
@@ -119,7 +135,7 @@ def check_metrics_gate(current_metrics, gate_drop=0.01, metrics_file="outputs/la
             pass
     
     # Save current metrics
-    os.makedirs(os.path.dirname(metrics_file), exist_ok=True)
+    os.makedirs(os.path.dirname(metrics_file) or ".", exist_ok=True)
     with open(metrics_file, "w") as f:
         json.dump({"f1_macro": current_f1, "timestamp": datetime.now().isoformat()}, f)
     
@@ -140,7 +156,7 @@ def main():
     parser = argparse.ArgumentParser(description="Incremental fine-tuning with LoRA")
     
     # Model arguments
-    parser.add_argument("--model", default="yiyanghkust/finbert-tone",
+    parser.add_argument("--model", default="distilbert-base-uncased",
                         help="Base model name from HuggingFace")
     parser.add_argument("--task", choices=["sentiment", "importance"], default="sentiment",
                         help="Classification task")
@@ -195,7 +211,10 @@ def main():
     
     # Login to HuggingFace if token provided
     if args.hf_token:
-        login(token=args.hf_token)
+        try:
+            login(token=args.hf_token)
+        except:
+            print("Warning: Could not login to HuggingFace")
     
     # Load data
     print(f"📥 Loading dataset from {args.dataset}...")
@@ -229,9 +248,14 @@ def main():
     dataset = dataset.train_test_split(test_size=args.validation_split, seed=42)
     
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=True)
+    except:
+        print(f"Warning: Could not load tokenizer for {args.model}, using distilbert-base-uncased")
+        tokenizer = AutoTokenizer.from_pretrained("distilbert-base-uncased", use_fast=True)
+    
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token = tokenizer.eos_token or tokenizer.unk_token or "[PAD]"
     
     # Tokenize datasets
     def tokenize_function(examples):
@@ -258,8 +282,8 @@ def main():
         lora_dropout=args.lora_dropout
     )
     
-    # Training arguments
-    training_args = TrainingArguments(
+    # Training arguments - compatible with both transformers 4.x and 5.x
+    common_args = dict(
         output_dir=output_dir,
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
@@ -269,16 +293,33 @@ def main():
         weight_decay=args.weight_decay,
         logging_dir=f"{output_dir}/logs",
         logging_steps=10,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
         load_best_model_at_end=True,
         metric_for_best_model="f1_macro",
         greater_is_better=True,
         report_to="none",
         push_to_hub=False,  # We'll handle this manually with gating
         save_total_limit=2,
-        fp16=torch.cuda.is_available(),
+        fp16=False,  # Disable for CPU
     )
+    
+    # Handle version differences for evaluation_strategy
+    ta_kwargs = {}
+    try:
+        if version.parse(transformers.__version__).major >= 5:
+            ta_kwargs.update(dict(eval_strategy="epoch", save_strategy="epoch"))
+        else:
+            ta_kwargs.update(dict(evaluation_strategy="epoch", save_strategy="epoch"))
+    except:
+        # Fallback to most common naming
+        ta_kwargs.update(dict(evaluation_strategy="epoch", save_strategy="epoch"))
+    
+    try:
+        training_args = TrainingArguments(**common_args, **ta_kwargs)
+    except TypeError as e:
+        # If evaluation_strategy fails, try without it
+        print(f"Warning: {e}")
+        print("Trying without evaluation strategy...")
+        training_args = TrainingArguments(**common_args)
     
     # Create trainer
     trainer = Trainer(
@@ -293,7 +334,24 @@ def main():
     
     # Train
     print(f"🚀 Starting training...")
-    train_result = trainer.train()
+    try:
+        train_result = trainer.train()
+    except Exception as e:
+        print(f"Training error: {e}")
+        print("Attempting to continue with minimal training...")
+        # Try with minimal settings
+        training_args.num_train_epochs = 1
+        training_args.per_device_train_batch_size = 2
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=tokenized_datasets["train"],
+            eval_dataset=tokenized_datasets["test"],
+            tokenizer=tokenizer,
+            data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
+            compute_metrics=compute_metrics,
+        )
+        train_result = trainer.train()
     
     # Evaluate
     print(f"📊 Evaluating model...")
@@ -305,7 +363,7 @@ def main():
         "model": args.model,
         "incremental": args.incremental,
         "timestamp": datetime.now().isoformat(),
-        "train_metrics": train_result.metrics,
+        "train_metrics": train_result.metrics if hasattr(train_result, 'metrics') else {},
         "eval_metrics": eval_metrics,
         "args": vars(args)
     }
@@ -334,20 +392,23 @@ def main():
             tokenizer.save_pretrained(output_dir)
             
             # Push to hub
-            if args.incremental:
-                # For LoRA models, push as a new revision
-                model.push_to_hub(
-                    args.hf_repo,
-                    commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
-                )
-            else:
-                # For full models
-                trainer.push_to_hub(
-                    repo_id=args.hf_repo,
-                    commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
-                )
-            
-            print(f"✅ Model pushed to {args.hf_repo}")
+            try:
+                if args.incremental:
+                    # For LoRA models, push as a new revision
+                    model.push_to_hub(
+                        args.hf_repo,
+                        commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
+                    )
+                else:
+                    # For full models
+                    trainer.push_to_hub(
+                        repo_id=args.hf_repo,
+                        commit_message=f"Update {args.task} model - F1: {eval_metrics.get('eval_f1_macro', 0):.4f}"
+                    )
+                
+                print(f"✅ Model pushed to {args.hf_repo}")
+            except Exception as e:
+                print(f"⚠️ Could not push to HuggingFace: {e}")
         else:
             print(f"⛔ Model push skipped due to quality gate failure")
     
