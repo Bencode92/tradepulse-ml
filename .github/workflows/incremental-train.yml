@@ -84,7 +84,7 @@ jobs:
           if [ ! -f "${DAILY_FILE}" ]; then
             echo "Creating substantial test dataset for ${{ steps.date.outputs.date }}..."
             
-            # Create a more substantial test dataset (50 samples)
+            # Create a more substantial test dataset (30 samples)
             cat > "${DAILY_FILE}" << 'EOF'
 {"text": "Apple reported strong quarterly earnings beating analyst expectations by a wide margin", "label_sentiment": "positive", "label_importance": "important", "date": "${{ steps.date.outputs.date }}"}
 {"text": "Market volatility increased amid economic uncertainty and inflation concerns", "label_sentiment": "negative", "label_importance": "critical", "date": "${{ steps.date.outputs.date }}"}
@@ -215,7 +215,7 @@ EOF
         with:
           name: training-metrics-${{ steps.date.outputs.date }}
           path: |
-            outputs/incremental/*/
+            outputs/incremental/**/metrics.json
             outputs/last_metrics.json.*
           retention-days: 30
 
@@ -279,5 +279,4 @@ EOF
     steps:
       - name: 📧 Send notification
         if: failure()
-        run: |
-          echo "⚠️ Incremental training workflow had issues. Check the logs for details."
+        run: echo "⚠️ Incremental training workflow had issues. Check the logs for details."
