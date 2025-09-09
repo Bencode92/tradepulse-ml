@@ -1,9 +1,13 @@
 name: 🔄 Incremental Training
 
 on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'datasets/**/*.jsonl'
+      - 'scripts/**/*.py'
   schedule:
     - cron: '30 4 * * *'
-  
   workflow_dispatch:
     inputs:
       date:
@@ -24,6 +28,14 @@ on:
         description: 'Push models to HF Hub'
         default: false
         type: boolean
+      merge_lora:
+        description: 'Push full model (merge LoRA)'
+        default: false
+        type: boolean
+
+concurrency:
+  group: incremental-training
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -37,139 +49,61 @@ env:
 
 jobs:
   incremental-train:
-    name: 🤖 Incremental Fine-tuning
     runs-on: ubuntu-latest
-    
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: 🐍 Setup Python
+          fetch-depth: 2
+      
+      - name: 🐍 Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
-
-      - name: 📦 Install dependencies (CPU-only)
+      
+      - name: 📦 Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.4.*"
+          pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-ml.txt
-          python -c "import transformers; print(f'Transformers version: {transformers.__version__}')"
-          echo "✅ Dependencies installed (CPU version)"
-
+          pip install peft accelerate
+      
       - name: 📅 Set date
         id: date
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then
-            DATE="${{ github.event.inputs.date }}"
+            echo "date=${{ github.event.inputs.date }}" >> $GITHUB_OUTPUT
           else
-            DATE=$(date -u +%F)
+            echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
           fi
-          echo "date=${DATE}" >> $GITHUB_OUTPUT
-          echo "Using date: ${DATE}"
-
-      - name: 📰 Create test dataset
+      
+      - name: 📥 Collect yesterday's data
         run: |
-          DAILY_FILE="datasets/daily/${{ steps.date.outputs.date }}.jsonl"
-          mkdir -p datasets/daily
-          
-          if [ ! -f "${DAILY_FILE}" ]; then
-            echo "Creating test dataset..."
-            python -c "
-          import json
-          samples = [
-              {'text': 'Apple reported strong earnings', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Market volatility increased', 'label_sentiment': 'negative', 'label_importance': 'critical'},
-              {'text': 'Oil prices remained stable', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Tech stocks surge on AI news', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Banking sector faces challenges', 'label_sentiment': 'negative', 'label_importance': 'important'},
-              {'text': 'Fed maintains interest rates', 'label_sentiment': 'neutral', 'label_importance': 'critical'},
-              {'text': 'Amazon beats expectations', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'European markets mixed', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Tesla shares drop', 'label_sentiment': 'negative', 'label_importance': 'important'},
-              {'text': 'Gold prices steady', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Microsoft cloud growth', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Crypto volatility high', 'label_sentiment': 'negative', 'label_importance': 'critical'},
-              {'text': 'Retail sales grow modestly', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Google ad revenue up', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Energy stocks decline', 'label_sentiment': 'negative', 'label_importance': 'important'},
-              {'text': 'Bond yields stable', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Netflix exceeds targets', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Airlines face fuel costs', 'label_sentiment': 'negative', 'label_importance': 'important'},
-              {'text': 'Asian markets flat', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Pharma breakthrough announced', 'label_sentiment': 'positive', 'label_importance': 'critical'},
-              {'text': 'Supply chain issues persist', 'label_sentiment': 'negative', 'label_importance': 'critical'},
-              {'text': 'Real estate stabilizing', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'EV sales surge', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Inflation data high', 'label_sentiment': 'negative', 'label_importance': 'critical'},
-              {'text': 'Small caps steady', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Bank profits record high', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Recession fears grow', 'label_sentiment': 'negative', 'label_importance': 'critical'},
-              {'text': 'Commodities range-bound', 'label_sentiment': 'neutral', 'label_importance': 'general'},
-              {'text': 'Biotech rally continues', 'label_sentiment': 'positive', 'label_importance': 'important'},
-              {'text': 'Retail bankruptcies rise', 'label_sentiment': 'negative', 'label_importance': 'important'}
-          ]
-          with open('${DAILY_FILE}', 'w') as f:
-              for s in samples:
-                  s['date'] = '${{ steps.date.outputs.date }}'
-                  f.write(json.dumps(s) + '\n')
-          print(f'Created {len(samples)} samples')
-            "
-            echo "✅ Test dataset created"
-          else
-            echo "Daily file already exists"
-          fi
-
-      - name: 🔄 Prepare replay buffer
+          python scripts/collect_news.py \
+            --source mixed \
+            --count 100 \
+            --days 1 \
+            --output "datasets/daily_$(date +%Y%m%d).jsonl" \
+            --format jsonl \
+            --auto-label \
+            --ml-model production
+      
+      - name: 🔀 Prepare replay buffer
         run: |
-          REPLAY_SIZE="${{ github.event.inputs.replay_size }}"
-          if [ -z "$REPLAY_SIZE" ]; then REPLAY_SIZE=800; fi
-          
-          if [ ! -f "datasets/history.jsonl" ]; then
-            touch "datasets/history.jsonl"
-          fi
-          
+          REPLAY_SIZE="${{ github.event.inputs.replay_size || '800' }}"
           python scripts/prepare_replay.py \
-            --daily "datasets/daily/${{ steps.date.outputs.date }}.jsonl" \
-            --history "datasets/history.jsonl" \
-            --out "datasets/combined.jsonl" \
-            --replay_size "$REPLAY_SIZE"
-          
-          echo "✅ Replay buffer prepared"
-
-      - name: 🔐 HF login
-        if: ${{ env.HF_TOKEN != '' && github.event.inputs.push_to_hub == true }}
-        run: |
-          python -c "
-          from huggingface_hub import login
-          import os
-          token = os.environ.get('HF_TOKEN')
-          if token:
-              login(token=token)
-              print('HF login successful')
-          else:
-              print('No HF token, skipping login')
-          "
-
+            --date "${{ steps.date.outputs.date }}" \
+            --replay-size "$REPLAY_SIZE" \
+            --output "datasets/combined.jsonl"
+      
       - name: 🎯 Train sentiment (LoRA)
-        continue-on-error: true
         run: |
-          GATE="${{ github.event.inputs.gate_drop }}"
-          if [ -z "$GATE" ]; then GATE=0.01; fi
-          
-          echo "Training sentiment model..."
-          
-          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
-            HF_REPO="${{ env.HF_REPO_SENTIMENT }}"
-          else
-            HF_REPO=""
-          fi
-          
+          GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
+          HF_REPO=""
+          MERGE=""
+          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then HF_REPO="${{ env.HF_REPO_SENTIMENT }}"; fi
+          if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
           python scripts/finetune_incremental.py \
             --task sentiment --incremental \
             --model "distilbert-base-uncased" \
@@ -178,24 +112,15 @@ jobs:
             --epochs 1 --batch_size 4 --learning_rate 5e-5 \
             --gate_drop "$GATE" \
             --hf_repo "$HF_REPO" \
-            --hf_token "${{ env.HF_TOKEN }}"
-          
-          echo "Sentiment training complete"
-
+            --hf_token "${{ env.HF_TOKEN }}" $MERGE
+      
       - name: 📊 Train importance (LoRA)
-        continue-on-error: true
         run: |
-          GATE="${{ github.event.inputs.gate_drop }}"
-          if [ -z "$GATE" ]; then GATE=0.01; fi
-          
-          echo "Training importance model..."
-          
-          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
-            HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"
-          else
-            HF_REPO=""
-          fi
-          
+          GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
+          HF_REPO=""
+          MERGE=""
+          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"; fi
+          if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
           python scripts/finetune_incremental.py \
             --task importance --incremental \
             --model "distilbert-base-uncased" \
@@ -204,10 +129,8 @@ jobs:
             --epochs 1 --batch_size 4 --learning_rate 5e-5 \
             --gate_drop "$GATE" \
             --hf_repo "$HF_REPO" \
-            --hf_token "${{ env.HF_TOKEN }}"
-          
-          echo "Importance training complete"
-
+            --hf_token "${{ env.HF_TOKEN }}" $MERGE
+      
       - name: 💾 Save metrics as artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -217,55 +140,12 @@ jobs:
             outputs/incremental/**/metrics.json
             outputs/last_metrics.json.*
           retention-days: 30
-
-      - name: 📝 Commit history updates
+      
+      - name: 📝 Commit updated datasets
         if: success()
-        continue-on-error: true
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add datasets/history.jsonl || true
-          git add datasets/combined.jsonl || true
-          git add datasets/daily/${{ steps.date.outputs.date }}.jsonl || true
-          
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: update training history for ${{ steps.date.outputs.date }} [skip ci]"
-            git push
-            echo "✅ History committed"
-          fi
-
-      - name: 📊 Generate summary
-        if: always()
-        run: |
-          echo "## 📊 Training Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Date:** ${{ steps.date.outputs.date }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Replay Size:** ${{ github.event.inputs.replay_size || '800' }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Gate Drop:** ${{ github.event.inputs.gate_drop || '0.01' }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -f "outputs/last_metrics.json.sentiment" ]; then
-            echo "### Sentiment Model" >> $GITHUB_STEP_SUMMARY
-            cat outputs/last_metrics.json.sentiment >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if [ -f "outputs/last_metrics.json.importance" ]; then
-            echo "### Importance Model" >> $GITHUB_STEP_SUMMARY
-            cat outputs/last_metrics.json.importance >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-
-  notify:
-    name: 📧 Notify Results
-    needs: incremental-train
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-      - name: 📧 Send notification
-        if: failure()
-        run: echo "⚠️ Incremental training workflow had issues. Check the logs for details."
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add datasets/*.jsonl
+          git diff --staged --quiet || git commit -m "📊 Add daily dataset and replay buffer for ${{ steps.date.outputs.date }}"
+          git push
