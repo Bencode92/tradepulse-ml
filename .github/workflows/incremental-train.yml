@@ -68,7 +68,10 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-ml.txt
           pip install peft accelerate
-      
+
+      - name: 🔧 Set PYTHONPATH for correlation module
+        run: echo "PYTHONPATH=${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}/config" >> $GITHUB_ENV
+
       - name: 📅 Set date
         id: date
         run: |
@@ -81,14 +84,36 @@ jobs:
       - name: 📥 Collect yesterday's data
         run: |
           python scripts/collect_news.py \
-            --source mixed \
+            --source fmp \
             --count 100 \
             --days 1 \
-            --output "datasets/daily_$(date +%Y%m%d).jsonl" \
-            --format jsonl \
+            --output "datasets/news_$(date +%Y%m%d).csv" \
             --auto-label \
             --ml-model production
-      
+
+      - name: 🔄 Convert CSV to JSONL for replay buffer
+        run: |
+          python - <<'PY'
+          import csv, json, os
+          from datetime import datetime
+          date_str = datetime.now().strftime("%Y%m%d")
+          csv_path = f"datasets/news_{date_str}.csv"
+          jsonl_path = f"datasets/daily_{date_str}.jsonl"
+          if not os.path.exists(csv_path):
+              raise SystemExit(f"❌ CSV not found: {csv_path}")
+          with open(csv_path, newline="", encoding="utf-8") as f_in, \
+               open(jsonl_path, "w", encoding="utf-8") as f_out:
+              for row in csv.DictReader(f_in):
+                  f_out.write(json.dumps({
+                      "text": row["text"],
+                      "label_sentiment": row["label"],
+                      "label_importance": row["importance"],
+                      "correlations": row.get("correlations", ""),
+                      "date": datetime.now().strftime("%Y-%m-%d"),
+                  }) + "\n")
+          print(f"✅ Converted {csv_path} -> {jsonl_path}")
+          PY
+
       - name: 🔀 Prepare replay buffer
         run: |
           REPLAY_SIZE="${{ github.event.inputs.replay_size || '800' }}"
@@ -102,7 +127,10 @@ jobs:
           GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
           HF_REPO=""
           MERGE=""
-          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then HF_REPO="${{ env.HF_REPO_SENTIMENT }}"; fi
+          # Push by default on scheduled runs OR when explicitly requested via workflow_dispatch
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
+            HF_REPO="${{ env.HF_REPO_SENTIMENT }}"
+          fi
           if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
           python scripts/finetune_incremental.py \
             --task sentiment --incremental \
@@ -119,7 +147,10 @@ jobs:
           GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
           HF_REPO=""
           MERGE=""
-          if [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"; fi
+          # Push by default on scheduled runs OR when explicitly requested via workflow_dispatch
+          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
+            HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"
+          fi
           if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
           python scripts/finetune_incremental.py \
             --task importance --incremental \
