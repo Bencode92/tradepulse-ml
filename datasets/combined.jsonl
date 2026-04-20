@@ -1,30 +1,3 @@
-{"text": "Airlines face fuel costs", "label_sentiment": "negative", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Amazon beats expectations", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Real estate stabilizing", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Gold prices steady", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Fed maintains interest rates", "label_sentiment": "neutral", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Tech stocks surge on AI news", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Microsoft cloud growth", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Commodities range-bound", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Small caps steady", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Pharma breakthrough announced", "label_sentiment": "positive", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Apple reported strong earnings", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "EV sales surge", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Recession fears grow", "label_sentiment": "negative", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Inflation data high", "label_sentiment": "negative", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "European markets mixed", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Google ad revenue up", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Retail sales grow modestly", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Banking sector faces challenges", "label_sentiment": "negative", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Energy stocks decline", "label_sentiment": "negative", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Bank profits record high", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Crypto volatility high", "label_sentiment": "negative", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Market volatility increased", "label_sentiment": "negative", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Bond yields stable", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Supply chain issues persist", "label_sentiment": "negative", "label_importance": "critical", "date": "2025-09-09"}
-{"text": "Netflix exceeds targets", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Oil prices remained stable", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Asian markets flat", "label_sentiment": "neutral", "label_importance": "general", "date": "2025-09-09"}
-{"text": "Tesla shares drop", "label_sentiment": "negative", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Biotech rally continues", "label_sentiment": "positive", "label_importance": "important", "date": "2025-09-09"}
-{"text": "Retail bankruptcies rise", "label_sentiment": "negative", "label_importance": "important", "date": "2025-09-09"}
+{"text": "coMSTR Stock Fails to Recover Despite Michael Saylor's Strategy $2.54 Billion Bitcoin Buy. MSTR stock has fallen over 2.5% premarket despite Strategy buying 34,164 BTC for $2.54B, lifting total holdings to 815,061 BTC.", "label_sentiment": "negative", "label_importance": "générale", "correlations": "", "date": "2026-04-20"}
+{"text": "Dover Set to Report Q1 Earnings: What's in Store for the Stock?. DOV heads into Q1 earnings release with solid growth forecasts, but our model signals no beat as supply-chain woes and weak vehicle services cloud the outlook.", "label_sentiment": "positive", "label_importance": "générale", "correlations": "", "date": "2026-04-20"}
+{"text": "COSMOS HEALTH ACCELERATES U.S. EXPANSION: LIV18 PHASE 1 EXECUTION COMPLETE; PRODUCTION AND SALES COMMENCING APRIL 2026; EXPECTED TO GENERATE $5M+ IN ANNUAL REVENUE AT ~75% GROSS MARGINS; EARLY U.S. COMMERCIAL TRACTION OBSERVED ACROSS PRODUCT PORTFOLIO. PHASE 1 COMPLETE: PRODUCT DEVELOPMENT, PACKAGING, AND INITIAL COMMERCIAL SETUP FINALIZED AHEAD OF SCHEDULE PRODUCTION COMMENCING APRIL 2026: GMP-CERTIFIED, FDA-REGISTERED, UL-AUDITED U.S. MANUFACTURING - MITIGATING TARIFF RISK $5M+ PROJECTED ANNUAL REVENUE: LIV18™ EXPECTED TO GENERATE OVER $5 MILLION ANNUALLY AT APPROXIMATELY 75% GROSS MARGINS DIRECT-TO-CONSUMER MODEL: SCALABLE DTC STRATEGY WITH TARGETED ADVERTISING AND DISCIPLINED CAPITAL ALLOCATION EARLY U.S. TRACTION CONFIRMED: COMMERCIAL INDICATORS FROM EXISTING PRODUCTS SHAPING REVENUE EXPECTATIONS AND GO-TO-MARKET STRATEGY CHICAGO, IL / ACCESS NEWSWIRE / APRIL 20, 2026 / COSMOS HEALTH INC. (\"COSMOS HEALTH\" OR THE \"COMPANY\") (NASDAQ:COSM) , A DIVERSIFIED, VERTICALLY INTEGRATED GLOBAL HEALTHCARE GROUP, TODAY PROVIDED A COMMERCIAL AND FINANCIAL UPDATE ON LIV18™, ITS CLINICALLY VALIDATED LIVER HEALTH SUPPLEMENT, AS THE COMPANY ACCELERATES ITS EXPANSION ACROSS THE UNITED STATES. THE COMPANY HAS SUCCESSFULLY COMPLETED PHASE 1 EXECUTION FOR LIV18™ (DEFINED AS PRODUCT DEVELOPMENT, PACKAGING, AND INITIAL COMMERCIAL SETUP) AHEAD OF SCHEDULE.", "label_sentiment": "neutral", "label_importance": "générale", "correlations": "", "date": "2026-04-20"}
