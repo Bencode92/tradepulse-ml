@@ -82,6 +82,9 @@ jobs:
           fi
       
       - name: 📥 Collect yesterday's data
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           python scripts/collect_news.py \
             --source fmp \
