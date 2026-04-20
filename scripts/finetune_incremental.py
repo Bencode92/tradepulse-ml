@@ -357,16 +357,21 @@ def main():
     # Training arguments - Using the robust helper function
     training_args = make_training_args(output_dir, args)
     
-    # Create trainer
-    trainer = Trainer(
+    # Create trainer — `tokenizer=` was renamed to `processing_class=` in
+    # transformers >= 4.46. Try the new name first, fall back to the old one
+    # so the same code works across versions.
+    trainer_kwargs = dict(
         model=model,
         args=training_args,
         train_dataset=tokenized_datasets["train"],
         eval_dataset=tokenized_datasets["test"] if "test" in tokenized_datasets else None,
-        tokenizer=tokenizer,
         data_collator=DataCollatorWithPadding(tokenizer=tokenizer),
         compute_metrics=compute_metrics,
     )
+    try:
+        trainer = Trainer(processing_class=tokenizer, **trainer_kwargs)
+    except TypeError:
+        trainer = Trainer(tokenizer=tokenizer, **trainer_kwargs)
     
     # Train
     print(f"🚀 Starting training...")
