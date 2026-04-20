@@ -180,6 +180,21 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add datasets/*.jsonl
-          git diff --staged --quiet || git commit -m "📊 Add daily dataset and replay buffer for ${{ steps.date.outputs.date }}"
-          git push
+          git add datasets/*.jsonl datasets/*.csv || true
+          if git diff --staged --quiet; then
+            echo "No dataset changes to commit."
+            exit 0
+          fi
+          git commit -m "📊 Add daily dataset and replay buffer for ${{ steps.date.outputs.date }}"
+          # Retry-with-rebase loop: another workflow (e.g. Daily News Dataset
+          # Collection) may have pushed to main while we were training.
+          for i in 1 2 3; do
+            if git push origin main; then
+              echo "✅ Pushed on attempt $i"
+              exit 0
+            fi
+            echo "⚠️ Push rejected, rebasing and retrying ($i/3)..."
+            git pull --rebase origin main || { echo "❌ Rebase failed"; exit 1; }
+          done
+          echo "❌ Push still failing after 3 attempts"
+          exit 1
