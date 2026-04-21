@@ -25,8 +25,8 @@ on:
         default: '0.01'
         type: string
       push_to_hub:
-        description: 'Push models to HF Hub'
-        default: false
+        description: 'Push models to HF Hub (uncheck to train without pushing)'
+        default: true
         type: boolean
       merge_lora:
         description: 'Push full model (merge LoRA)'
@@ -128,13 +128,12 @@ jobs:
       - name: 🎯 Train sentiment (LoRA)
         run: |
           GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
-          HF_REPO=""
+          # Default: push. Only skip if workflow_dispatch was run with push_to_hub=false.
+          HF_REPO="${{ env.HF_REPO_SENTIMENT }}"
+          if [ "${{ github.event.inputs.push_to_hub }}" = "false" ]; then HF_REPO=""; fi
           MERGE=""
-          # Push by default on scheduled runs OR when explicitly requested via workflow_dispatch
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
-            HF_REPO="${{ env.HF_REPO_SENTIMENT }}"
-          fi
           if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
+          echo "🔎 HF_REPO='$HF_REPO' (empty = skip push)"
           python scripts/finetune_incremental.py \
             --task sentiment --incremental \
             --model "distilbert-base-uncased" \
@@ -148,13 +147,12 @@ jobs:
       - name: 📊 Train importance (LoRA)
         run: |
           GATE="${{ github.event.inputs.gate_drop || '0.01' }}"
-          HF_REPO=""
+          # Default: push. Only skip if workflow_dispatch was run with push_to_hub=false.
+          HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"
+          if [ "${{ github.event.inputs.push_to_hub }}" = "false" ]; then HF_REPO=""; fi
           MERGE=""
-          # Push by default on scheduled runs OR when explicitly requested via workflow_dispatch
-          if [ "${{ github.event_name }}" = "schedule" ] || [ "${{ github.event.inputs.push_to_hub }}" = "true" ]; then
-            HF_REPO="${{ env.HF_REPO_IMPORTANCE }}"
-          fi
           if [ "${{ github.event.inputs.merge_lora }}" = "true" ]; then MERGE="--merge_lora"; fi
+          echo "🔎 HF_REPO='$HF_REPO' (empty = skip push)"
           python scripts/finetune_incremental.py \
             --task importance --incremental \
             --model "distilbert-base-uncased" \
